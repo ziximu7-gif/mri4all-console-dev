@@ -32,6 +32,7 @@ import services.ui.protocolbrowser as protocolbrowser
 import services.ui.flexviewer as flexviewer
 from sequences import SequenceBase
 from services.ui.viewerwidget import MplCanvas, ViewerWidget
+from services.ui.spatialbox import PlanningState
 from services.ui.custommessagebox import CustomMessageBox  # type: ignore
 import services.ui.control as control
 
@@ -41,26 +42,26 @@ import external.seq.adjustments_acq.config as cfg
 
 log = logger.get_logger()
 
-scanParameters_stylesheet = """ 
-    QTabBar { 
+scanParameters_stylesheet = """
+    QTabBar {
         font-size: 16px;
         font-weight: bold;
-    }  
+    }
     QTabBar::tab {
         margin-left:0px;
-        margin-right:16px;          
+        margin-right:16px;
         border-bottom: 3px solid transparent;
     }
     QTabBar::tab:selected {
         border-bottom: 3px solid #E0A526;
-    }                
+    }
     QTabBar::tab:selected:disabled {
         border-bottom: 3px solid transparent;
-    }                
+    }
     QTabBar::tab:disabled {
         color: #515669;
         border-bottom: 3px solid transparent;
-    }                            
+    }
     """
 
 scanParameters_stylesheet_error = (
@@ -86,6 +87,8 @@ class ExaminationWindow(QMainWindow):
         """
         super(ExaminationWindow, self).__init__()
         uic.loadUi(f"{rt.get_console_path()}/services/ui/forms/examination.ui", self)
+        # Shared 3D planning geometry for the current exam.
+        self.planning_state = PlanningState()
         self.actionClose_Examination.triggered.connect(self.close_examination_clicked)
         self.actionShutdown.triggered.connect(self.shutdown_clicked)
         self.actionAbout.triggered.connect(about.show_about)
@@ -181,16 +184,16 @@ class ExaminationWindow(QMainWindow):
             QMenu::item:selected {
                 background: #0ff;
                 color: red;
-            }                                            
+            }
             """
         )
         self.add_sequence_menu = QMenu(self)
         self.add_sequence_menu.setStyleSheet(
             """
             QMenu::item:selected {
-                background: #E0A526; 
+                background: #E0A526;
                 color: #FFF;
-            }                                            
+            }
             """
         )
         self.addScanButton.setMenu(self.add_sequence_menu)
@@ -270,6 +273,22 @@ class ExaminationWindow(QMainWindow):
         self.viewer3.setProperty("id", "3")
         viewer3Layout.addWidget(self.viewer3)
         self.viewer3Frame.setLayout(viewer3Layout)
+
+        # -----------------------------------------------------
+        # Tri-planar planning synchronization
+        # -----------------------------------------------------
+
+        self.viewer1.planning_changed.connect(
+            self.refresh_planning_boxes
+        )
+
+        self.viewer2.planning_changed.connect(
+            self.refresh_planning_boxes
+        )
+
+        self.viewer3.planning_changed.connect(
+            self.refresh_planning_boxes
+        )
 
         self.sequenceResolutionLabel.setStyleSheet(
             "color: #515669; font-size: 18px; font-weight: normal;"
@@ -676,11 +695,29 @@ class ExaminationWindow(QMainWindow):
         )
         view_action.setProperty("source", str(entry.folder_name))
         view_action.setProperty("target", "viewer3")
-        view_action = image_button_menu.addAction(
-            "Show in Flex Viewer", self.load_result_in_viewer
+        #view_action = image_button_menu.addAction(
+        #    "Show in Flex Viewer", self.load_result_in_viewer
+        #)
+        #view_action.setProperty("source", str(entry.folder_name))
+        #view_action.setProperty("target", "flex")
+        # -------------------------------------------------
+        # Result selector for Flex Viewer
+        # -------------------------------------------------
+
+        flex_result_menu = (
+            image_button_menu.addMenu(
+                "Show result in Flex Viewer"
+            )
         )
-        view_action.setProperty("source", str(entry.folder_name))
-        view_action.setProperty("target", "flex")
+
+        flex_result_menu.setProperty(
+            "source",
+            str(entry.folder_name),
+        )
+
+        flex_result_menu.aboutToShow.connect(
+            self.populate_flex_result_menu
+        )
         imageWidgetButton.setMenu(image_button_menu)
         imageWidgetButton.setStyleSheet(
             """QPushButton::menu-indicator {
@@ -690,7 +727,7 @@ class ExaminationWindow(QMainWindow):
                                             }
                 QPushButton::hover {
                     background-color: #FFF;
-                }     
+                }
             """
         )
         widgetLayout = QHBoxLayout()
@@ -889,6 +926,8 @@ class ExaminationWindow(QMainWindow):
             task.set_task_state(scan_path, mri4all_files.PREPARED, False)
 
         scan_task = task.read_task(scan_path)
+        if scan_task.sequence == "localizer":
+            self.set3Viewers()
         ui_runtime.editor_protocol_name = scan_task.protocol_name
 
         if not ui_runtime.editor_sequence_instance.set_parameters(
@@ -1098,6 +1137,24 @@ class ExaminationWindow(QMainWindow):
     def debug_update_scan_list(self):
         self.sync_queue_widget(False)
 
+    def refresh_planning_boxes(self):
+        """
+        One viewer changed the shared Box3D.
+
+        Refresh all three projections.
+        """
+
+        self.viewer1.refresh_planning_rois()
+        self.viewer2.refresh_planning_rois()
+        self.viewer3.refresh_planning_rois()
+
+        log.debug(
+            "Planning state: "
+            + str(
+                self.planning_state.as_dict()
+            )
+        )
+
     def set1Viewer(self):
         self.viewer1Frame.setVisible(True)
         self.viewer2Frame.setVisible(False)
@@ -1243,6 +1300,200 @@ class ExaminationWindow(QMainWindow):
         self.viewer2.view_data("", "empty", {})
         self.viewer3.view_data("", "empty", {})
         self.flexViewer.view_data("", "empty", {})
+    def populate_flex_result_menu(self):
+        """
+        Populate the Flex Viewer result menu with all
+        results belonging to the selected scan.
+        """
+
+        result_menu = self.sender()
+
+        if not result_menu:
+            return
+
+        # Rebuild every time the menu is opened.
+        # This ensures newly generated results appear
+        # without rebuilding the entire queue widget.
+
+        result_menu.clear()
+
+        scan_folder = result_menu.property(
+            "source"
+        )
+
+        if not scan_folder:
+            log.warning(
+                "Unable to identify scan "
+                "for result menu."
+            )
+            return
+
+        scan_path = (
+            mri4all_paths.DATA_COMPLETE
+            + "/"
+            + scan_folder
+        )
+
+        scan_task = task.read_task(
+            scan_path
+        )
+
+        if not scan_task:
+            log.warning(
+                "Unable to load scan task "
+                "for result menu."
+            )
+            return
+
+        if len(scan_task.results) == 0:
+
+            empty_action = (
+                result_menu.addAction(
+                    "No results available"
+                )
+            )
+
+            empty_action.setEnabled(
+                False
+            )
+
+            return
+
+        # -------------------------------------------------
+        # Add one menu entry for every ResultItem
+        # -------------------------------------------------
+
+        for result_index, result_item in enumerate(
+            scan_task.results
+        ):
+
+            result_name = (
+                result_item.name
+            )
+
+            if not result_name:
+
+                result_name = (
+                    f"Result {result_index + 1}"
+                )
+
+            # Show result type as well.
+            menu_text = (
+                f"{result_name} "
+                f"[{result_item.type}]"
+            )
+
+            action = (
+                result_menu.addAction(
+                    menu_text
+                )
+            )
+
+            action.setProperty(
+                "source",
+                scan_folder,
+            )
+
+            action.setProperty(
+                "result_index",
+                result_index,
+            )
+
+            action.triggered.connect(
+                self.load_specific_result_in_flex_viewer
+            )
+
+    def load_specific_result_in_flex_viewer(
+        self
+    ):
+        """
+        Load one explicitly selected ResultItem
+        into the Flex Viewer.
+        """
+
+        action = self.sender()
+
+        if not action:
+            return
+
+        scan_folder = action.property(
+            "source"
+        )
+
+        result_index = action.property(
+            "result_index"
+        )
+
+        if scan_folder is None:
+            log.warning(
+                "Unable to identify scan "
+                "for Flex Viewer."
+            )
+            return
+
+        if result_index is None:
+            log.warning(
+                "Unable to identify result "
+                "for Flex Viewer."
+            )
+            return
+
+        scan_path = (
+            mri4all_paths.DATA_COMPLETE
+            + "/"
+            + str(scan_folder)
+        )
+
+        scan_task = task.read_task(
+            scan_path
+        )
+
+        if not scan_task:
+            log.warning(
+                "Unable to load scan task "
+                "for Flex Viewer."
+            )
+            return
+
+        result_index = int(
+            result_index
+        )
+
+        if (
+            result_index < 0
+            or result_index
+            >= len(scan_task.results)
+        ):
+
+            log.warning(
+                "Invalid result index "
+                "for Flex Viewer."
+            )
+
+            return
+
+        result_item = (
+            scan_task.results[
+                result_index
+            ]
+        )
+
+        result_path = (
+            scan_path
+            + "/"
+            + result_item.file_path
+        )
+
+        log.info(
+            "Loading result in Flex Viewer: "
+            + result_item.name
+        )
+
+        self.flexViewer.view_data(
+            result_path,
+            result_item.type,
+            scan_task,
+        )
 
     def load_result_in_viewer(self):
         scan_folder = self.sender().property("source")
@@ -1295,11 +1546,74 @@ class ExaminationWindow(QMainWindow):
         for result_item in scan_task.results:
             result_path = scan_path + "/" + result_item.file_path
             if result_item.autoload_viewer == 1:
-                self.viewer1.view_data(result_path, result_item.type, scan_task)
+
+                if (
+                    scan_task.sequence
+                    == "localizer"
+                    and result_item.type
+                    == "dicom"
+                ):
+
+                    self.viewer1.set_planning_context(
+                        "Axial",
+                        self.planning_state,
+                    )
+
+                else:
+
+                    self.viewer1.clear_planning_context()
+
+                self.viewer1.view_data(
+                    result_path,
+                    result_item.type,
+                    scan_task,
+                )
             elif result_item.autoload_viewer == 2:
-                self.viewer2.view_data(result_path, result_item.type, scan_task)
+
+                if (
+                    scan_task.sequence
+                    == "localizer"
+                    and result_item.type
+                    == "dicom"
+                ):
+
+                    self.viewer2.set_planning_context(
+                        "Coronal",
+                        self.planning_state,
+                    )
+
+                else:
+
+                    self.viewer2.clear_planning_context()
+
+                self.viewer2.view_data(
+                    result_path,
+                    result_item.type,
+                    scan_task,
+                )
             elif result_item.autoload_viewer == 3:
-                self.viewer3.view_data(result_path, result_item.type, scan_task)
+
+                if (
+                    scan_task.sequence
+                    == "localizer"
+                    and result_item.type
+                    == "dicom"
+                ):
+
+                    self.viewer3.set_planning_context(
+                        "Sagittal",
+                        self.planning_state,
+                    )
+
+                else:
+
+                    self.viewer3.clear_planning_context()
+
+                self.viewer3.view_data(
+                    result_path,
+                    result_item.type,
+                    scan_task,
+                )
             elif result_item.autoload_viewer == 4:
                 self.flexViewer.view_data(result_path, result_item.type, scan_task)
             elif result_item.autoload_viewer == 0:
