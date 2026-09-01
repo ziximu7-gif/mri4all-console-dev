@@ -17,6 +17,7 @@ from sequences.common import make_tse_3D
 import common.logger as logger
 from common.types import ResultItem
 import common.helper as helper
+import common.config as config
 
 log = logger.get_logger()
 
@@ -123,6 +124,7 @@ class SequenceFID(PulseqSequence, registry_key=Path(__file__).stem):
             gui_test=False,
             case_path=self.get_working_folder(),
             raw_filename="raw",
+            hardware_simulation=config.get_config().is_hardware_simulation(),
         )
 
         log.info("Plotting results...")

@@ -500,7 +500,7 @@ class Sequence:
                 self.grad_library.data[selected_events[i]][4] *= modifier
 
     def plot(self, label: str = str(), save: bool = False, time_range=(0, np.inf), time_disp: str = 's',
-             plot_type: str = 'Gradient') -> None:
+             plot_type: str = 'Gradient', show: bool = True) -> None:
         """
         Plot `Sequence`.
 
@@ -633,7 +633,11 @@ class Sequence:
         if save:
             fig1.savefig('seq_plot1.jpg')
             fig2.savefig('seq_plot2.jpg')
-        plt.show()
+        #plt.show()
+
+        if show:
+            plt.show()
+        return fig1, fig2
 
     def read(self, file_path: str) -> None:
         """

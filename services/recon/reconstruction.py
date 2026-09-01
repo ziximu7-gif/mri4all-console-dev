@@ -42,6 +42,11 @@ def run_reconstruction(folder: str, task: ScanTask) -> bool:
         run_reconstruction_basic3d(folder, task)
         return True
 
+    if task.processing.recon_mode == "localizer2d":
+        log.info("Running 3-plane Localizer reconstruction")
+        run_reconstruction_localizer2d(folder, task)
+        return True
+
     if task.processing.trajectory == "cartesian":
         log.info("Running Cartesian reconstruction")
         run_reconstruction_cartesian(folder, task)
@@ -114,7 +119,17 @@ def run_reconstruction_basic3d(folder: str, task: ScanTask) -> bool:
     if task.processing.oversampling_read > 0:
         offset = int(dims[2]) / 4
         fft = fft[int(offset) : int(3 * offset), :, :]
-
+    log.info(f"FFT shape = {fft.shape}")
+    log.info(f"FFT abs min = {np.min(np.abs(fft))}")
+    log.info(f"FFT abs max = {np.max(np.abs(fft))}")
+    log.info(f"FFT abs mean = {np.mean(np.abs(fft))}")
+    log.info(f"FFT contains NaN = {np.isnan(fft).any()}")
+    for i in range(fft.shape[2]):
+        log.info(
+            f"Slice {i}: "
+            f"min={np.min(np.abs(fft[:, :, i]))}, "
+            f"max={np.max(np.abs(fft[:, :, i]))}"
+        )
     DICOM.write_dicom(fft, task, folder + "/" + mri4all_taskdata.DICOM, result_index=0)
 
     # kSpace = np.angle(kSpace)
@@ -143,6 +158,200 @@ def run_reconstruction_basic3d(folder: str, task: ScanTask) -> bool:
 
     return True
 
+def run_reconstruction_localizer2d(
+    folder: str,
+    task: ScanTask,
+) -> bool:
+
+    log.info(
+        "Starting 3-plane 2D localizer reconstruction"
+    )
+
+    # -------------------------------------------------
+    # Read matrix size
+    # -------------------------------------------------
+
+    if task.processing.dim_size:
+        dims = task.processing.dim_size.split(",")
+
+        ny = int(dims[0])
+        nx = int(dims[1])
+
+    else:
+        raise RuntimeError(
+            "Localizer reconstruction: "
+            "dim_size is not defined"
+        )
+
+    log.info(
+        f"Localizer matrix size = {ny} x {nx}"
+    )
+
+    # -------------------------------------------------
+    # Raw-data folder
+    # -------------------------------------------------
+
+    raw_folder = os.path.join(
+        folder,
+        mri4all_taskdata.RAWDATA,
+    )
+
+    # -------------------------------------------------
+    # Definition of the three localizer groups
+    # -------------------------------------------------
+
+    groups = [
+        {
+            "orientation": "Axial",
+            "filename": "localizer_axial.npy",
+            "viewer": 1,
+            "series_offset": 0,
+        },
+        {
+            "orientation": "Coronal",
+            "filename": "localizer_coronal.npy",
+            "viewer": 2,
+            "series_offset": 1,
+        },
+        {
+            "orientation": "Sagittal",
+            "filename": "localizer_sagittal.npy",
+            "viewer": 3,
+            "series_offset": 2,
+        },
+    ]
+
+    # -------------------------------------------------
+    # Reconstruct every localizer group
+    # -------------------------------------------------
+
+    for index, group in enumerate(groups):
+
+        orientation = group["orientation"]
+
+        raw_file = os.path.join(
+            raw_folder,
+            group["filename"],
+        )
+
+        log.info(
+            f"Reconstructing {orientation} localizer"
+        )
+
+        log.info(
+            f"Loading raw data: {raw_file}"
+        )
+
+        # ---------------------------------------------
+        # Check file
+        # ---------------------------------------------
+
+        if not os.path.isfile(raw_file):
+            raise RuntimeError(
+                f"{orientation} localizer raw data "
+                f"not found: {raw_file}"
+            )
+
+        # ---------------------------------------------
+        # Load ADC / k-space
+        # ---------------------------------------------
+
+        raw = np.load(raw_file)
+
+        log.info(
+            f"{orientation} raw samples = "
+            f"{raw.size}"
+        )
+
+        expected_samples = nx * ny
+
+        if raw.size != expected_samples:
+            raise RuntimeError(
+                f"{orientation} localizer expected "
+                f"{expected_samples} samples, "
+                f"but found {raw.size}"
+            )
+
+        # ---------------------------------------------
+        # Convert 1D ADC stream into 2D k-space
+        # ---------------------------------------------
+
+        kspace = raw.reshape(
+            (ny, nx)
+        )
+
+        log.info(
+            f"{orientation} k-space shape = "
+            f"{kspace.shape}"
+        )
+
+        # ---------------------------------------------
+        # 2D FFT
+        # ---------------------------------------------
+
+        image = np.fft.fftshift(
+            np.fft.fft2(
+                np.fft.fftshift(
+                    kspace
+                )
+            )
+        )
+
+        log.info(
+            f"{orientation} image shape = "
+            f"{image.shape}"
+        )
+
+        log.info(
+            f"{orientation} image magnitude: "
+            f"min={np.min(np.abs(image)):.6f}, "
+            f"max={np.max(np.abs(image)):.6f}, "
+            f"mean={np.mean(np.abs(image)):.6f}"
+        )
+
+        # ---------------------------------------------
+        # DICOM writer expects a 3D ndarray:
+        #
+        # height x width x slices
+        #
+        # Our localizer is only one 2D image,
+        # therefore add a one-slice dimension.
+        # ---------------------------------------------
+
+        image_3d = image[:, :, np.newaxis]
+
+        # ---------------------------------------------
+        # Write one DICOM series
+        # ---------------------------------------------
+
+        DICOM.write_dicom(
+            image_3d,
+            task,
+            folder
+            + "/"
+            + mri4all_taskdata.DICOM,
+            series_offset=group["series_offset"],
+            name=f"{orientation} Localizer",
+            description=(
+                f"{orientation} 2D Spin-Echo "
+                "localizer image"
+            ),
+            primary_result=(
+                orientation == "Axial"
+            ),
+            autoload_viewer=group["viewer"],
+            result_index=index,
+        )
+
+        log.info(
+            f"Finished {orientation} localizer"
+        )
+
+    log.info(
+        "Finished 3-plane Localizer reconstruction"
+    )
+
+    return True
 
 def run_reconstruction_cartesian(folder: str, task: ScanTask):
     """

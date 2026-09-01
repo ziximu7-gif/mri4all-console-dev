@@ -64,10 +64,12 @@ class Configuration(BaseModel):
     def update(self, data: Dict):
         update = self.model_dump()
         update.update(data)
-        for k, v in (
-            self.model_validate(update).model_dump(exclude_defaults=True).items()
-        ):
+
+        validated = self.model_validate(update)
+
+        for k, v in validated.model_dump().items():
             setattr(self, k, v)
+
         return self
 
     def is_hardware_simulation(self):

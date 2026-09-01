@@ -146,8 +146,455 @@ def run_pulseq(
             ax.grid(True, color="#333")
 
     if hardware_simulation:
-        log.info("Hardware simulation set. Skipping scan.")
-        return [], []
+        log.info("Hardware simulation set. Generating synthetic MRI data.")
+
+        # ---------------------------------------------------------
+        # Common information
+        # ---------------------------------------------------------
+
+        seq_name = Path(seq_file).stem
+        seq_name_lower = seq_name.lower()
+
+        rawdata_folder = Path(case_path) / mri4all_taskdata.RAWDATA
+
+        pe_order_file = (
+            rawdata_folder
+            / mri4all_scanfiles.PE_ORDER
+        )
+
+        adc_phase_file = (
+            rawdata_folder
+            / mri4all_scanfiles.ADC_PHASE
+        )
+
+        # =========================================================
+        # 1. 2D LOCALIZER SIMULATION
+        # =========================================================
+        #
+        # localizer creates files such as:
+        #
+        # localizer_0_Axial.seq
+        # localizer_1_Coronal.seq
+        # localizer_2_Sagittal.seq
+        #
+        # These sequences do NOT generate pe_order.npy, therefore
+        # we detect them by their sequence filename.
+        # =========================================================
+
+        if "localizer" in seq_name_lower:
+
+            log.info(
+                f"Detected 2D localizer sequence: {seq_name}"
+            )
+
+            # Total number of ADC samples reported by Pulseq.
+            #
+            # For current SE localizer:
+            #
+            # Base Resolution = 96
+            #
+            # 96 phase encoding lines
+            # x
+            # 96 readout samples
+            #
+            # = 9216 samples
+            #
+            n_samples = int(param_dict["readout_number"])
+
+            # Current localizer uses a square acquisition matrix.
+            n = int(np.sqrt(n_samples))
+
+            if n * n != n_samples:
+                raise RuntimeError(
+                    "Localizer simulation expected a square "
+                    f"2D acquisition, but got {n_samples} samples"
+                )
+
+            log.info(
+                f"Localizer simulation matrix: {n} x {n}"
+            )
+
+            # -----------------------------------------------------
+            # Determine which localizer group is currently running
+            # -----------------------------------------------------
+
+            if "axial" in seq_name_lower:
+                orientation = "Axial"
+
+            elif "coronal" in seq_name_lower:
+                orientation = "Coronal"
+
+            elif "sagittal" in seq_name_lower:
+                orientation = "Sagittal"
+
+            else:
+                orientation = "Unknown"
+
+            log.info(
+                f"Generating synthetic {orientation} localizer"
+            )
+
+            # -----------------------------------------------------
+            # Create image coordinates
+            # -----------------------------------------------------
+
+            x = np.linspace(-1.0, 1.0, n)
+            y = np.linspace(-1.0, 1.0, n)
+
+            xx, yy = np.meshgrid(
+                x,
+                y,
+                indexing="xy",
+            )
+
+            phantom = np.zeros(
+                (n, n),
+                dtype=np.float64,
+            )
+
+            # -----------------------------------------------------
+            # Give each orientation a different shape.
+            #
+            # This is only for Hardware Simulation.
+            # It makes it obvious in the UI that Viewer 1/2/3
+            # contain three different localizer groups.
+            # -----------------------------------------------------
+
+            if orientation == "Axial":
+
+                # Wider body shape
+                body = (
+                    (xx / 0.72) ** 2
+                    + (yy / 0.52) ** 2
+                ) <= 1.0
+
+                phantom[body] = 1.0
+
+                # Bright asymmetric feature
+                feature_1 = (
+                    ((xx - 0.22) / 0.13) ** 2
+                    + ((yy + 0.12) / 0.16) ** 2
+                ) <= 1.0
+
+                phantom[feature_1] = 2.0
+
+                # Darker feature
+                feature_2 = (
+                    ((xx + 0.25) / 0.12) ** 2
+                    + ((yy - 0.10) / 0.13) ** 2
+                ) <= 1.0
+
+                phantom[feature_2] = 0.4
+
+            elif orientation == "Coronal":
+
+                # Taller body shape
+                body = (
+                    (xx / 0.48) ** 2
+                    + (yy / 0.82) ** 2
+                ) <= 1.0
+
+                phantom[body] = 1.0
+
+                feature_1 = (
+                    ((xx - 0.15) / 0.12) ** 2
+                    + ((yy + 0.30) / 0.15) ** 2
+                ) <= 1.0
+
+                phantom[feature_1] = 2.0
+
+                feature_2 = (
+                    ((xx + 0.18) / 0.10) ** 2
+                    + ((yy - 0.25) / 0.18) ** 2
+                ) <= 1.0
+
+                phantom[feature_2] = 0.4
+
+            elif orientation == "Sagittal":
+
+                # Narrower side-view shape
+                body = (
+                    (xx / 0.38) ** 2
+                    + (yy / 0.82) ** 2
+                ) <= 1.0
+
+                phantom[body] = 1.0
+
+                feature_1 = (
+                    ((xx - 0.10) / 0.11) ** 2
+                    + ((yy + 0.32) / 0.16) ** 2
+                ) <= 1.0
+
+                phantom[feature_1] = 2.0
+
+                feature_2 = (
+                    ((xx + 0.12) / 0.08) ** 2
+                    + ((yy - 0.22) / 0.20) ** 2
+                ) <= 1.0
+
+                phantom[feature_2] = 0.4
+
+            else:
+
+                # Fallback phantom
+                body = (
+                    (xx / 0.60) ** 2
+                    + (yy / 0.60) ** 2
+                ) <= 1.0
+
+                phantom[body] = 1.0
+
+            # -----------------------------------------------------
+            # Convert image -> synthetic k-space
+            #
+            # IMPORTANT:
+            #
+            # run_pulseq() should return ADC/k-space data,
+            # NOT an already reconstructed image.
+            #
+            # Later reconstruction will FFT this back into phantom.
+            # -----------------------------------------------------
+
+            kspace = np.fft.ifftshift(
+                np.fft.ifft2(
+                    np.fft.ifftshift(
+                        phantom
+                    )
+                )
+            )
+
+            # Hardware returns ADC samples as one continuous
+            # 1-dimensional vector.
+            rxd = kspace.reshape(-1)
+
+            log.info(
+                f"Generated synthetic {orientation} "
+                f"2D k-space: {len(rxd)} samples"
+            )
+
+        # =========================================================
+        # 2. EXISTING 3D SIMULATION
+        # =========================================================
+        #
+        # Keep the simulation that we previously added for TSE3D.
+        # TSE3D creates both pe_order.npy and adc_phase.npy.
+        # =========================================================
+
+        elif (
+            pe_order_file.exists()
+            and adc_phase_file.exists()
+        ):
+
+            log.info(
+                "Detected PE order. "
+                "Generating synthetic 3D phantom."
+            )
+
+            order = np.load(pe_order_file)
+            adc_phases = np.load(adc_phase_file)
+
+            n_lines = len(order)
+
+            if n_lines == 0:
+                raise RuntimeError(
+                    "Simulation failed: PE order is empty"
+                )
+
+            if len(adc_phases) > 0:
+                n_read = int(
+                    param_dict["readout_number"]
+                    / len(adc_phases)
+                )
+            else:
+                raise RuntimeError(
+                    "Simulation failed: "
+                    "ADC phase array is empty"
+                )
+
+            n_pe = len(
+                np.unique(order[:, 0])
+            )
+
+            n_slc = len(
+                np.unique(order[:, 1])
+            )
+
+            log.info(
+                f"Simulation dimensions: "
+                f"read={n_read}, "
+                f"pe={n_pe}, "
+                f"slices={n_slc}, "
+                f"lines={n_lines}"
+            )
+
+            x = np.linspace(
+                -1.0,
+                1.0,
+                n_read,
+            )[:, None, None]
+
+            y = np.linspace(
+                -1.0,
+                1.0,
+                n_pe,
+            )[None, :, None]
+
+            z = np.linspace(
+                -1.0,
+                1.0,
+                n_slc,
+            )[None, None, :]
+
+            phantom = np.zeros(
+                (n_read, n_pe, n_slc),
+                dtype=np.float64,
+            )
+
+            main_object = (
+                (x / 0.38) ** 2
+                + (y / 0.62) ** 2
+                + (z / 0.75) ** 2
+            ) <= 1.0
+
+            phantom[main_object] = 1.0
+
+            object_2 = (
+                ((x + 0.16) / 0.11) ** 2
+                + ((y - 0.20) / 0.16) ** 2
+                + ((z + 0.10) / 0.25) ** 2
+            ) <= 1.0
+
+            phantom[object_2] = 2.0
+
+            object_3 = (
+                ((x - 0.18) / 0.08) ** 2
+                + ((y + 0.22) / 0.12) ** 2
+                + ((z - 0.18) / 0.18) ** 2
+            ) <= 1.0
+
+            phantom[object_3] = 0.5
+
+            kspace = np.fft.ifftshift(
+                np.fft.ifftn(
+                    np.fft.ifftshift(
+                        phantom
+                    )
+                )
+            )
+
+            raw = np.zeros(
+                (n_lines, n_read),
+                dtype=np.complex128,
+            )
+
+            center_pe = (
+                n_pe
+                - int(n_pe / 2)
+            )
+
+            center_slc = (
+                n_slc
+                - int(n_slc / 2)
+            )
+
+            for counter, line in enumerate(order):
+
+                pe_index = (
+                    center_pe
+                    - int(line[0])
+                ) % n_pe
+
+                slice_index = (
+                    center_slc
+                    - int(line[1])
+                ) % n_slc
+
+                phase = (
+                    float(adc_phases[counter])
+                    / 180.0
+                    * np.pi
+                )
+
+                raw[counter, :] = (
+                    kspace[
+                        :,
+                        pe_index,
+                        slice_index,
+                    ]
+                    * np.exp(
+                        -1j * phase
+                    )
+                )
+
+            rxd = raw.reshape(-1)
+
+            log.info(
+                f"Generated {len(rxd)} "
+                "synthetic ADC samples"
+            )
+
+        # =========================================================
+        # 3. FALLBACK: FID SIMULATION
+        # =========================================================
+
+        else:
+
+            log.info(
+                "No localizer or PE order detected. "
+                "Generating synthetic FID signal."
+            )
+
+            n_samples = int(
+                param_dict["readout_number"]
+            )
+
+            t = np.arange(n_samples)
+
+            rxd = (
+                np.exp(
+                    -t
+                    / max(n_samples / 5, 1)
+                )
+                * np.exp(
+                    1j
+                    * 2
+                    * np.pi
+                    * 0.02
+                    * t
+                )
+            )
+
+        # =========================================================
+        # Optional raw-data saving
+        # =========================================================
+
+        if not raw_filename:
+            raw_filename = "raw"
+
+        if save_np:
+
+            filename = (
+                Path(case_path)
+                / mri4all_taskdata.RAWDATA
+                / f"{raw_filename}.npy"
+            )
+
+            if os.path.exists(filename):
+                os.remove(filename)
+
+            np.save(
+                filename,
+                rxd,
+            )
+
+            log.info(
+                f"Saved synthetic raw data "
+                f"to {filename}"
+            )
+
+        return rxd, param_dict["rx_t"]
+
+
 
     # Initialize experiment class
     if expt is None:

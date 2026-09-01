@@ -84,7 +84,7 @@ def pypulseq_se2D(
     # )
 
     system = pp.Opts(
-        max_grad=400,
+        max_grad=100,
         grad_unit="mT/m",
         max_slew=4000,
         slew_unit="T/m/s",
