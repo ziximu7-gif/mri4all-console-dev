@@ -926,6 +926,7 @@ class ExaminationWindow(QMainWindow):
             task.set_task_state(scan_path, mri4all_files.PREPARED, False)
 
         scan_task = task.read_task(scan_path)
+        self.load_planning_state_from_task(scan_task)
         if scan_task.sequence == "localizer":
             self.set3Viewers()
         ui_runtime.editor_protocol_name = scan_task.protocol_name
@@ -1138,6 +1139,35 @@ class ExaminationWindow(QMainWindow):
 
     def debug_update_scan_list(self):
         self.sync_queue_widget(False)
+
+    def load_planning_state_from_task(self, scan_task):
+        planning = scan_task.other.get("planning")
+
+        if not isinstance(planning, dict):
+            return
+
+        for box_name in ("fov_box", "shim_box"):
+            box_data = planning.get(box_name)
+
+            if not isinstance(box_data, dict):
+                continue
+
+            box = getattr(
+                self.planning_state,
+                box_name,
+            )
+
+            for field_name, value in box_data.items():
+                if hasattr(box, field_name):
+                    setattr(
+                        box,
+                        field_name,
+                        float(value),
+                    )
+
+            box.clamp()
+
+        self.refresh_planning_boxes()
 
     def refresh_planning_boxes(self):
         """
