@@ -969,6 +969,8 @@ class ExaminationWindow(QMainWindow):
             ui_runtime.editor_scantask.other = json.loads(
                 self.otherParametersTextEdit.toPlainText()
             )
+            # Store the current exam planning geometry with the scan task.
+            ui_runtime.editor_scantask.other["planning"] = self.planning_state.as_dict()
             self.store_seqparam_from_ui(ui_runtime.editor_scantask)
             ui_runtime.editor_scantask.journal.prepared_at = helper.get_datetime()
             task.write_task(scan_path, ui_runtime.editor_scantask)
