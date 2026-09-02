@@ -179,6 +179,137 @@ class ViewerWidget(QWidget):
             return "y", "z"
 
         return None, None
+    def _projected_box_geometry(self, box):
+        """
+        Project the rotated 3D box into the current localizer plane.
+        Returns:
+            width, height, angle
+        Width and height are normalized to the localizer image size.
+        """
+        rx = np.deg2rad(box.rotation_x)
+        ry = np.deg2rad(box.rotation_y)
+        rz = np.deg2rad(box.rotation_z)
+
+        cx, sx = np.cos(rx), np.sin(rx)
+        cy, sy = np.cos(ry), np.sin(ry)
+        cz, sz = np.cos(rz), np.sin(rz)
+
+        rotation_x = np.array([
+            [1.0, 0.0, 0.0],
+            [0.0, cx, -sx],
+            [0.0, sx, cx],
+        ])
+        # Sign convention chosen so positive Coronal ROI angle
+        # remains positive in the X-Z viewer.
+        rotation_y = np.array([
+            [cy, 0.0, -sy],
+            [0.0, 1.0, 0.0],
+            [sy, 0.0, cy],
+        ])
+        rotation_z = np.array([
+            [cz, -sz, 0.0],
+            [sz, cz, 0.0],
+            [0.0, 0.0, 1.0],
+        ])
+        rotation = (
+            rotation_z
+            @ rotation_y
+            @ rotation_x
+        )
+
+        if self.planning_orientation == "Axial":
+            plane_axes = np.array([
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+            ])
+            primary_axis = 0
+        elif self.planning_orientation == "Coronal":
+            plane_axes = np.array([
+                [1.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0],
+            ])
+            primary_axis = 0
+        elif self.planning_orientation == "Sagittal":
+            plane_axes = np.array([
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0],
+            ])
+            primary_axis = 1
+        else:
+            return 0.0, 0.0, 0.0
+
+        projected_axes = plane_axes @ rotation
+
+        half_sizes = np.array([
+            box.size_x,
+            box.size_y,
+            box.size_z,
+        ]) / 2.0
+
+        primary = projected_axes[:, primary_axis]
+        primary_norm = np.linalg.norm(primary)
+
+        if primary_norm < 1e-9:
+            projected_lengths = (
+                np.linalg.norm(
+                    projected_axes,
+                    axis=0,
+                )
+                * half_sizes
+            )
+
+            primary_axis = int(
+                np.argmax(projected_lengths)
+            )
+
+            primary = projected_axes[:, primary_axis]
+            primary_norm = np.linalg.norm(primary)
+
+        if primary_norm < 1e-9:
+            return 0.0, 0.0, 0.0
+
+        horizontal_direction = (
+            primary / primary_norm
+        )
+
+        if horizontal_direction[0] < 0:
+            horizontal_direction = (
+                -horizontal_direction
+            )
+
+        vertical_direction = np.array([
+            -horizontal_direction[1],
+            horizontal_direction[0],
+        ])
+
+        half_width = np.sum(
+            half_sizes
+            * np.abs(
+                horizontal_direction
+                @ projected_axes
+            )
+        )
+
+        half_height = np.sum(
+            half_sizes
+            * np.abs(
+                vertical_direction
+                @ projected_axes
+            )
+        )
+
+        angle = np.rad2deg(
+            np.arctan2(
+                horizontal_direction[1],
+                horizontal_direction[0],
+            )
+        )
+
+        return (
+            2.0 * half_width,
+            2.0 * half_height,
+            float(angle),
+        )
 
     def _plane_rotation_axis(self):
         """
@@ -207,20 +338,11 @@ class ViewerWidget(QWidget):
         return None
 
     def _box_angle(self, box):
-
-        rotation_axis = (
-            self._plane_rotation_axis()
+        _, _, angle = (
+            self._projected_box_geometry(box)
         )
 
-        if rotation_axis is None:
-            return 0.0
-
-        return float(
-            getattr(
-                box,
-                f"rotation_{rotation_axis}",
-            )
-        )
+        return angle
 
     def _set_box_angle(
         self,
@@ -304,15 +426,11 @@ class ViewerWidget(QWidget):
             f"center_{vertical_axis}",
         )
 
-        horizontal_size = getattr(
-            box,
-            f"size_{horizontal_axis}",
-        )
-
-        vertical_size = getattr(
-            box,
-            f"size_{vertical_axis}",
-        )
+        (
+            horizontal_size,
+            vertical_size,
+            _,
+        ) = self._projected_box_geometry(box)
 
         roi_width = (
             horizontal_size
@@ -506,15 +624,11 @@ class ViewerWidget(QWidget):
             f"center_{vertical_axis}",
         )
 
-        size_horizontal = getattr(
-            box,
-            f"size_{horizontal_axis}",
-        )
-
-        size_vertical = getattr(
-            box,
-            f"size_{vertical_axis}",
-        )
+        (
+            size_horizontal,
+            size_vertical,
+            angle,
+        ) = self._projected_box_geometry(box)
 
         roi_width = (
             size_horizontal
@@ -535,11 +649,6 @@ class ViewerWidget(QWidget):
             center_vertical
             * image_height
         )
-
-        angle = self._box_angle(
-            box
-        )
-
         # Apply size first
         roi.setSize(
             [
