@@ -176,6 +176,7 @@ def run_reconstruction_localizer2d(
 
         ny = int(dims[0])
         nx = int(dims[1])
+        nsa = int(task.parameters.get("NSA", 1))
 
     else:
         raise RuntimeError(
@@ -185,6 +186,9 @@ def run_reconstruction_localizer2d(
 
     log.info(
         f"Localizer matrix size = {ny} x {nx}"
+    )
+    log.info(
+        f"Localizer NSA = {nsa}"
     )
 
     # -------------------------------------------------
@@ -263,7 +267,7 @@ def run_reconstruction_localizer2d(
             f"{raw.size}"
         )
 
-        expected_samples = nx * ny
+        expected_samples = nsa * nx * ny
 
         if raw.size != expected_samples:
             raise RuntimeError(
@@ -276,8 +280,13 @@ def run_reconstruction_localizer2d(
         # Convert 1D ADC stream into 2D k-space
         # ---------------------------------------------
 
-        kspace = raw.reshape(
-            (ny, nx)
+        kspace_averages = raw.reshape(
+            (nsa, ny, nx)
+        )
+
+        kspace = np.mean(
+            kspace_averages,
+            axis=0,
         )
 
         log.info(

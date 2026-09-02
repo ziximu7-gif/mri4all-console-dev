@@ -161,7 +161,7 @@ class SequenceSE_2D(PulseqSequence, registry_key=Path(__file__).stem):
                 inputs={
                     "TE": self.param_TE,
                     "TR": self.param_TR,
-                    "NSA": 1,
+                    "NSA": self.param_NSA,
                     "FOV": self.param_FOV,
                     "Orientation": orientation,
                     "Base_Resolution": self.param_Base_Resolution,
