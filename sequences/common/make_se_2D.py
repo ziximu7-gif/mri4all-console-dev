@@ -50,17 +50,19 @@ def pypulseq_se2D(
     adc_duration = Nx * adc_dwell  # 6.4e-3
 
     # TODO: coordinate the orientation
-    ch0 = "x"
-    ch1 = "y"
     if Orientation == "Axial":
-        ch0 = "y"
-        ch1 = "z"
+        ch0 = "x"
+        ch1 = "y"
     elif Orientation == "Sagittal":
         ch0 = "x"
         ch1 = "z"
-    elif Orientation == "coronal":
-        ch0 = "x"
-        ch1 = "y"
+    elif Orientation == "Coronal":
+        ch0 = "y"
+        ch1 = "z"
+    else:
+        raise ValueError(
+            f"Unsupported 2D orientation: {Orientation}"
+        )
 
     # ======
     # INITIATE SEQUENCE
