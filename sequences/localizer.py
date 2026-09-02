@@ -29,7 +29,7 @@ class SequenceSE_2D(PulseqSequence, registry_key=Path(__file__).stem):
     param_Orientation: str = "Axial"
     param_Base_Resolution: int = 96
     param_BW: int = 32000
-    param_Trajectory: str = "Catisian"
+    param_Trajectory: str = "Cartesian"
     param_PE_Ordering: str = "Center_out"
     param_PF: int = 1
     param_view_traj: bool = True
@@ -87,14 +87,15 @@ class SequenceSE_2D(PulseqSequence, registry_key=Path(__file__).stem):
             self.param_TR = parameters["TR"]
             self.param_NSA = parameters["NSA"]
             self.param_FOV = parameters["FOV"]
-            self.param_Orientation = parameters["Orientation"]
+            self.param_Orientation = "Axial"
+
             self.param_Base_Resolution = parameters["Base_Resolution"]
             self.param_BW = parameters["BW"]
             self.param_Trajectory = parameters["Trajectory"]
             self.param_PE_Ordering = parameters["PE_Ordering"]
             self.param_PF = parameters["PF"]
             self.param_view_traj = parameters["view_traj"]
-        except:
+        except Exception:
             self.problem_list.append("Invalid parameters provided")
             return False
         return self.validate_parameters(scan_task)
@@ -119,7 +120,7 @@ class SequenceSE_2D(PulseqSequence, registry_key=Path(__file__).stem):
         self.param_TE = widget.TESpinBox.value()
         self.param_TR = widget.TRSpinBox.value()
         self.param_NSA = widget.NSA_SpinBox.value()
-        self.param_Orientation = widget.Orientation_ComboBox.currentText()
+        self.param_Orientation = "Axial"
         self.param_FOV = widget.FOV_SpinBox.value()
         self.param_Base_Resolution = widget.Base_Resolution_SpinBox.value()
         self.param_BW = widget.BW_SpinBox.value()
