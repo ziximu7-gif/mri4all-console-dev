@@ -89,6 +89,8 @@ class ExaminationWindow(QMainWindow):
         uic.loadUi(f"{rt.get_console_path()}/services/ui/forms/examination.ui", self)
         # Shared 3D planning geometry for the current exam.
         self.planning_state = PlanningState()
+        # Scan folder of the localizer currently used for planning.
+        self.planning_scan_path = None
         self.actionClose_Examination.triggered.connect(self.close_examination_clicked)
         self.actionShutdown.triggered.connect(self.shutdown_clicked)
         self.actionAbout.triggered.connect(about.show_about)
@@ -160,6 +162,25 @@ class ExaminationWindow(QMainWindow):
         self.editScanButton.setIconSize(QSize(24, 24))
         self.editScanButton.setProperty("type", "toolbar")
         self.editScanButton.clicked.connect(self.edit_sequence_clicked)
+
+        self.applyPlanningButton.setText("")
+        self.applyPlanningButton.setToolTip(
+            "Save current FOV and Shim planning"
+        )
+        self.applyPlanningButton.setIcon(
+            qta.icon("fa5s.save")
+        )
+        self.applyPlanningButton.setIconSize(
+            QSize(24, 24)
+        )
+        self.applyPlanningButton.setProperty(
+            "type",
+            "toolbar",
+        )
+        self.applyPlanningButton.setEnabled(False)
+        self.applyPlanningButton.clicked.connect(
+            self.apply_planning_clicked
+        )
 
         self.deleteScanButton.setText("")
         self.deleteScanButton.setToolTip("Delete selected sequence")
@@ -926,7 +947,7 @@ class ExaminationWindow(QMainWindow):
             task.set_task_state(scan_path, mri4all_files.PREPARED, False)
 
         scan_task = task.read_task(scan_path)
-        self.load_planning_state_from_task(scan_task)
+        #self.load_planning_state_from_task(scan_task)
         if scan_task.sequence == "localizer":
             self.set3Viewers()
         ui_runtime.editor_protocol_name = scan_task.protocol_name
@@ -971,7 +992,7 @@ class ExaminationWindow(QMainWindow):
                 self.otherParametersTextEdit.toPlainText()
             )
             # Store the current exam planning geometry with the scan task.
-            ui_runtime.editor_scantask.other["planning"] = self.planning_state.as_dict()
+            
             self.store_seqparam_from_ui(ui_runtime.editor_scantask)
             ui_runtime.editor_scantask.journal.prepared_at = helper.get_datetime()
             task.write_task(scan_path, ui_runtime.editor_scantask)
@@ -1166,8 +1187,54 @@ class ExaminationWindow(QMainWindow):
                     )
 
             box.clamp()
+        log.info(
+            f"Loaded planning state: {self.planning_state.as_dict()}"
+        )
 
         self.refresh_planning_boxes()
+
+    def apply_planning_clicked(self):
+        if not self.planning_scan_path:
+            log.warning(
+                "No localizer is available for planning."
+            )
+            return
+
+        scan_task = task.read_task(
+            self.planning_scan_path
+        )
+
+        if not scan_task:
+            log.error(
+                "Unable to read localizer scan task."
+            )
+            return
+
+        if scan_task.sequence != "localizer":
+            log.error(
+                "Planning source is not a localizer."
+            )
+            return
+
+        scan_task.other["planning"] = (
+            self.planning_state.as_dict()
+        )
+
+        if not task.write_task(
+            self.planning_scan_path,
+            scan_task,
+        ):
+            log.error(
+                "Unable to save localizer planning."
+            )
+            return
+
+        log.info(
+            "Saved localizer planning: "
+            + str(
+                self.planning_state.as_dict()
+            )
+        )
 
     def refresh_planning_boxes(self):
         """
@@ -1573,6 +1640,13 @@ class ExaminationWindow(QMainWindow):
         if not scan_task:
             log.warning("Unable load scan task for viewers.")
             return
+        if scan_task.sequence == "localizer":
+            self.planning_scan_path = scan_path
+            self.applyPlanningButton.setEnabled(True)
+
+            self.load_planning_state_from_task(
+                scan_task
+            )
 
         # Loop over all results of the scan task
         for result_item in scan_task.results:

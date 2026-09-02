@@ -373,6 +373,25 @@
                     <property name="text">
                      <string>edit</string>
                     </property>
+                    </widget>
+                    </item>
+                  <item>
+                    <widget class="QPushButton" name="applyPlanningButton">
+                    <property name="minimumSize">
+                    <size>
+                        <width>52</width>
+                        <height>52</height>
+                    </size>
+                    </property>
+                    <property name="maximumSize">
+                    <size>
+                        <width>52</width>
+                        <height>52</height>
+                    </size>
+                    </property>
+                    <property name="text">
+                    <string>Apply</string>
+                    </property>
                    </widget>
                   </item>
                   <item>
