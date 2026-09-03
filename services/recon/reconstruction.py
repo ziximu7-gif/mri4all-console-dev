@@ -17,6 +17,9 @@ from recon.image_filters import denoise
 from recon.recon_utils.cartesian3d import (
     reconstruct_cartesian_3d_complex,
 )
+from recon.B0Shim.b0_shim import (
+    calculate_b0_map,
+)
 
 log = logger.get_logger()
 
@@ -44,6 +47,13 @@ def run_reconstruction(folder: str, task: ScanTask) -> bool:
         log.info("Running Basic 3D reconstruction")
         run_reconstruction_basic3d(folder, task)
         return True
+
+    if task.processing.recon_mode == "b0_map":
+        log.info("Running B0 map reconstruction")
+        return run_reconstruction_b0_map(
+            folder,
+            task,
+        )
 
     if task.processing.recon_mode == "localizer2d":
         log.info("Running 3-plane Localizer reconstruction")
@@ -128,6 +138,118 @@ def run_reconstruction_basic3d(folder: str, task: ScanTask) -> bool:
         primary_result=False,
         result_index=3,
         autoload_viewer=3,
+    )
+
+    return True
+
+def run_reconstruction_b0_map(
+    folder: str,
+    task: ScanTask,
+) -> bool:
+
+    if task.processing.dim != 3:
+        log.error(
+            "B0 mapping requires 3D acquisition."
+        )
+        return False
+
+    order = np.load(
+        folder
+        + "/"
+        + mri4all_taskdata.RAWDATA
+        + "/"
+        + mri4all_scanfiles.PE_ORDER
+    )
+
+    adc_phases = np.load(
+        folder
+        + "/"
+        + mri4all_taskdata.RAWDATA
+        + "/"
+        + mri4all_scanfiles.ADC_PHASE
+    )
+
+    raw = np.load(
+        folder
+        + "/"
+        + mri4all_taskdata.RAWDATA
+        + "/"
+        + mri4all_scanfiles.RAWDATA
+    )
+
+    dims = task.processing.dim_size.split(",")
+
+    images, _ = (
+        reconstruct_cartesian_3d_complex(
+            raw=raw,
+            order=order,
+            adc_phases=adc_phases,
+            dims=dims,
+            echo_count=2,
+            oversampling_read=(
+                task.processing.oversampling_read
+            ),
+        )
+    )
+
+    image_te1 = images[0]
+    image_te2 = images[1]
+
+    try:
+        te1_ms = float(
+            task.parameters["TE1"]
+        )
+
+        te2_ms = float(
+            task.parameters["TE2"]
+        )
+
+    except (KeyError, TypeError, ValueError):
+        log.error(
+            "B0 mapping requires TE1 and TE2 "
+            "in sequence parameters."
+        )
+        return False
+    if te2_ms <= te1_ms:
+        log.error(
+            "B0 mapping requires TE2 > TE1."
+        )
+        return False
+    delta_te_s = (
+        te2_ms - te1_ms
+    ) / 1000.0
+
+    b0_hz = calculate_b0_map(
+        image_te1=image_te1,
+        image_te2=image_te2,
+        delta_te_s=delta_te_s,
+    )
+
+    output_file = os.path.join(
+        folder,
+        mri4all_taskdata.RAWDATA,
+        "b0_map.npy",
+    )
+
+    np.save(
+        output_file,
+        b0_hz,
+    )
+
+    log.info(
+        f"B0 map shape = {b0_hz.shape}"
+    )
+
+    log.info(
+        "B0 map range = "
+        f"{np.min(b0_hz):.3f} "
+        "to "
+        f"{np.max(b0_hz):.3f} Hz"
+    )
+
+    log.info(
+        "B0 map mean = "
+        f"{np.mean(b0_hz):.3f} Hz"
     )
 
     return True
