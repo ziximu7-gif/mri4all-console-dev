@@ -135,6 +135,24 @@ class ExaminationWindow(QMainWindow):
         self.closePatientButton.setIconSize(QSize(32, 32))
         self.closePatientButton.clicked.connect(self.close_examination_clicked)
 
+        self.copyFovButton.setText("")
+        self.copyFovButton.setToolTip(
+            "Copy FOV from localizer planning"
+        )
+        self.copyFovButton.setIcon(
+            qta.icon("fa5s.copy")
+        )
+        self.copyFovButton.setIconSize(
+            QSize(24, 24)
+        )
+        self.copyFovButton.setProperty(
+            "type",
+            "toolbar",
+        )
+        self.copyFovButton.clicked.connect(
+            self.copy_fov_clicked
+        )
+
         self.acceptScanEditButton.setText("")
         self.acceptScanEditButton.setToolTip("Accept changes")
         self.acceptScanEditButton.setIcon(qta.icon("fa5s.check"))
@@ -1029,6 +1047,78 @@ class ExaminationWindow(QMainWindow):
         self.scanParametersWidget.insertTab(0, new_container_widget, "SEQUENCE")
         self.scanParametersWidget.widget(0).setStyleSheet("background-color: #0C1123;")
         return new_container_widget
+
+    def copy_fov_clicked(self):
+        if not self.planning_scan_path:
+            log.warning(
+                "No localizer planning is available."
+            )
+            return
+
+        planning_task = task.read_task(
+            self.planning_scan_path
+        )
+
+        if not planning_task:
+            log.error(
+                "Unable to read localizer planning task."
+            )
+            return
+
+        planning = planning_task.other.get(
+            "planning"
+        )
+
+        if not isinstance(planning, dict):
+            log.warning(
+                "Localizer planning has not been applied."
+            )
+            return
+
+        fov_box = planning.get(
+            "fov_box"
+        )
+
+        if not isinstance(fov_box, dict):
+            log.warning(
+                "Localizer planning has no FOV box."
+            )
+            return
+
+        try:
+            other_data = json.loads(
+                self.otherParametersTextEdit.toPlainText()
+            )
+        except Exception:
+            log.warning(
+                "Other parameters contain invalid JSON."
+            )
+            return
+
+        geometry = other_data.setdefault(
+            "geometry",
+            {},
+        )
+
+        geometry["fov_box"] = dict(
+            fov_box
+        )
+
+        self.otherParametersTextEdit.setPlainText(
+            json.dumps(
+                other_data,
+                indent=4,
+            )
+        )
+
+        ui_runtime.editor_scantask.other = (
+            other_data
+        )
+
+        log.info(
+            "Copied localizer FOV to current scan: "
+            + str(fov_box)
+        )
 
     def accept_scan_edit_clicked(self):
         problems_list = []
