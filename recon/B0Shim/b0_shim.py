@@ -166,3 +166,169 @@ def fit_first_order_b0(
         ),
         "voxel_count": voxel_count,
     }
+def create_shim_roi_mask(
+    volume_shape,
+    shim_box,
+) -> np.ndarray:
+    """
+    Convert a normalized shim box into a 3D ROI mask.
+
+    Parameters
+    ----------
+    volume_shape:
+        Shape of the B0 map: (nx, ny, nz).
+
+    shim_box:
+        Dictionary containing normalized
+        center/size/rotation values.
+
+    Returns
+    -------
+    np.ndarray
+        Boolean ROI mask with volume_shape.
+    """
+
+    if len(volume_shape) != 3:
+        raise ValueError(
+            "Shim ROI requires a 3D volume."
+        )
+
+    nx, ny, nz = (
+        int(volume_shape[0]),
+        int(volume_shape[1]),
+        int(volume_shape[2]),
+    )
+
+    if nx <= 0 or ny <= 0 or nz <= 0:
+        raise ValueError(
+            "Volume dimensions must be positive."
+        )
+
+    rotation_x = float(
+        shim_box.get("rotation_x", 0.0)
+    )
+    rotation_y = float(
+        shim_box.get("rotation_y", 0.0)
+    )
+    rotation_z = float(
+        shim_box.get("rotation_z", 0.0)
+    )
+
+    if any(
+        abs(angle) > 1e-6
+        for angle in (
+            rotation_x,
+            rotation_y,
+            rotation_z,
+        )
+    ):
+        raise NotImplementedError(
+            "Rotated shim ROI is not supported yet."
+        )
+
+    center_x = float(shim_box["center_x"])
+    center_y = float(shim_box["center_y"])
+    center_z = float(shim_box["center_z"])
+
+    size_x = float(shim_box["size_x"])
+    size_y = float(shim_box["size_y"])
+    size_z = float(shim_box["size_z"])
+
+    x = (
+        np.arange(nx, dtype=float) + 0.5
+    ) / nx
+
+    y = (
+        np.arange(ny, dtype=float) + 0.5
+    ) / ny
+
+    z = (
+        np.arange(nz, dtype=float) + 0.5
+    ) / nz
+
+    x, y, z = np.meshgrid(
+        x,
+        y,
+        z,
+        indexing="ij",
+    )
+
+    mask = (
+        (
+            np.abs(x - center_x)
+            <= size_x / 2.0
+        )
+        & (
+            np.abs(y - center_y)
+            <= size_y / 2.0
+        )
+        & (
+            np.abs(z - center_z)
+            <= size_z / 2.0
+        )
+    )
+
+    return mask
+
+def create_physical_coordinate_grids(
+    volume_shape,
+    fov_x_m,
+    fov_y_m,
+    fov_z_m,
+):
+    """
+    Create scanner-centered physical coordinate grids.
+
+    Returns x, y, z in meters with the same shape
+    as the reconstructed 3D B0 map.
+    """
+
+    if len(volume_shape) != 3:
+        raise ValueError(
+            "Physical coordinates require a 3D volume."
+        )
+
+    nx, ny, nz = (
+        int(volume_shape[0]),
+        int(volume_shape[1]),
+        int(volume_shape[2]),
+    )
+
+    if nx <= 0 or ny <= 0 or nz <= 0:
+        raise ValueError(
+            "Volume dimensions must be positive."
+        )
+
+    if (
+        fov_x_m <= 0
+        or fov_y_m <= 0
+        or fov_z_m <= 0
+    ):
+        raise ValueError(
+            "FOV dimensions must be positive."
+        )
+
+    x_axis = (
+        (np.arange(nx, dtype=float) + 0.5)
+        / nx
+        - 0.5
+    ) * fov_x_m
+
+    y_axis = (
+        (np.arange(ny, dtype=float) + 0.5)
+        / ny
+        - 0.5
+    ) * fov_y_m
+
+    z_axis = (
+        (np.arange(nz, dtype=float) + 0.5)
+        / nz
+        - 0.5
+    ) * fov_z_m
+
+    return np.meshgrid(
+        x_axis,
+        y_axis,
+        z_axis,
+        indexing="ij",
+    )
