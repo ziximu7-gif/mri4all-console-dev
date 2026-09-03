@@ -169,6 +169,11 @@ class B0MapAdjustment(
         )
 
         scan_task.processing.oversampling_read = 2
+        scan_task.other["b0_geometry"] = {
+            "fov_x_m": self.param_FOV / 1000.0,
+            "fov_y_m": self.param_FOV / 1000.0,
+            "fov_z_m": self.param_FOV / 2000.0,
+        }
 
         # Make sure reconstruction has access
         # to the actual echo times used.

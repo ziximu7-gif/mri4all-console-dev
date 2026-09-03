@@ -19,6 +19,9 @@ from recon.recon_utils.cartesian3d import (
 )
 from recon.B0Shim.b0_shim import (
     calculate_b0_map,
+    create_shim_roi_mask,
+    create_physical_coordinate_grids,
+    fit_first_order_b0,
 )
 
 log = logger.get_logger()
@@ -224,6 +227,70 @@ def run_reconstruction_b0_map(
         image_te2=image_te2,
         delta_te_s=delta_te_s,
     )
+    planning = task.other.get(
+        "planning"
+    )
+
+    if (
+        not planning
+        or "shim_box" not in planning
+    ):
+        log.error(
+            "B0 mapping requires a saved shim box."
+        )
+        return False
+
+    geometry = task.other.get(
+        "b0_geometry"
+    )
+
+    if not geometry:
+        log.error(
+            "B0 mapping requires acquisition geometry."
+        )
+        return False
+
+    try:
+        roi_mask = create_shim_roi_mask(
+            volume_shape=b0_hz.shape,
+            shim_box=planning["shim_box"],
+        )
+
+        x_m, y_m, z_m = (
+            create_physical_coordinate_grids(
+                volume_shape=b0_hz.shape,
+                fov_x_m=float(
+                    geometry["fov_x_m"]
+                ),
+                fov_y_m=float(
+                    geometry["fov_y_m"]
+                ),
+                fov_z_m=float(
+                    geometry["fov_z_m"]
+                ),
+            )
+        )
+
+        fit_result = fit_first_order_b0(
+            b0_hz=b0_hz,
+            x_m=x_m,
+            y_m=y_m,
+            z_m=z_m,
+            roi_mask=roi_mask,
+        )
+        task.other["b0_fit"] = fit_result
+
+    except (
+        KeyError,
+        TypeError,
+        ValueError,
+        NotImplementedError,
+    ) as exc:
+        log.error(
+            "Unable to calculate first-order B0 shim: "
+            + str(exc)
+        )
+        return False
 
     output_file = os.path.join(
         folder,
@@ -250,6 +317,40 @@ def run_reconstruction_b0_map(
     log.info(
         "B0 map mean = "
         f"{np.mean(b0_hz):.3f} Hz"
+    )
+
+    log.info(
+        "First-order B0 fit:"
+    )
+
+    log.info(
+        "Offset = "
+        f"{fit_result['offset_hz']:.3f} Hz"
+    )
+
+    log.info(
+        "Gradient X = "
+        f"{fit_result['gradient_x_hz_per_m']:.3f} Hz/m"
+    )
+
+    log.info(
+        "Gradient Y = "
+        f"{fit_result['gradient_y_hz_per_m']:.3f} Hz/m"
+    )
+
+    log.info(
+        "Gradient Z = "
+        f"{fit_result['gradient_z_hz_per_m']:.3f} Hz/m"
+    )
+
+    log.info(
+        "Residual RMS = "
+        f"{fit_result['rms_residual_hz']:.3f} Hz"
+    )
+
+    log.info(
+        "Shim ROI voxels = "
+        f"{fit_result['voxel_count']}"
     )
 
     return True
