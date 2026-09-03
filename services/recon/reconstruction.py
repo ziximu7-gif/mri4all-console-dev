@@ -14,6 +14,9 @@ from recon.B0Correction import B0Corrector
 import recon.DICOM.DICOM_utils as DICOM
 from recon.ismrmrd.numpy_to_ismrmrd import create_ismrmrd
 from recon.image_filters import denoise
+from recon.recon_utils.cartesian3d import (
+    reconstruct_cartesian_3d_complex,
+)
 
 log = logger.get_logger()
 
@@ -75,55 +78,26 @@ def run_reconstruction_basic3d(folder: str, task: ScanTask) -> bool:
     dims = task.processing.dim_size.split(",")
     # dim = slices:pe:read
 
-    # Simple recon
-    # kData = np.reshape(kData, (int(dims[1]) * int(dims[0]), int(dims[2])))
-    # kData = np.reshape(kData, (int(dims[1]), int(dims[0]), int(dims[2])))
-    # kData = np.transpose(kData, axes=[2, 0, 1])
-    # kSpace = kData.copy()
+    images, kspaces = reconstruct_cartesian_3d_complex(
+        raw=kData,
+        order=order,
+        adc_phases=adc_phases,
+        dims=dims,
+        echo_count=1,
+        oversampling_read=task.processing.oversampling_read,
+    )
 
-    # Index-based recon
-    kData = np.reshape(kData, (int(dims[1]) * int(dims[0]), int(dims[2])))
+    fft = images[0]
+    kSpace = kspaces[0]
+
     log.info(f"Readout size = {kData.shape}")
-    kSpace = np.zeros(dtype=complex, shape=(int(dims[2]), int(dims[1]), int(dims[0])))
     log.info(f"Matrix size = {kSpace.shape}")
-
-    center_slc = kSpace.shape[2] - int(kSpace.shape[2] / 2)
-    center_pe = kSpace.shape[1] - int(kSpace.shape[1] / 2)
-    max_slc = kSpace.shape[2]
-    max_pe = kSpace.shape[1]
-
-    counter = 0
-    for line in order:
-        # kSpace[200:511, center_pe - line[0], center_slc - line[1]] = kData[
-        #     counter, 200:511
-        # ]
-
-        # Remove phase offset, if RF spoiling has been used
-        adc_phase = adc_phases[counter] / 180.0 * np.pi
-
-        kSpace[
-            :, (center_pe - line[0]) % max_pe, (center_slc - line[1]) % max_slc
-        ] = kData[counter, :] * np.exp(adc_phase * 1j)
-        counter += 1
-
-    fft = np.fft.fftshift(np.fft.fftn(np.fft.fftshift(kSpace)))
-
-    base_res = fft.shape[0]
-    for sample in range(0, base_res):
-        fft[sample, :, :] = fft[sample, :, :] * np.exp(
-            # np.pi * 1j + base_res / 16 * (sample - base_res / 2) / (2 * base_res) * np.pi * 1j
-            np.pi * 1j
-            + (sample - base_res / 2) / 32 * np.pi * 1j
-        )
-
-    if task.processing.oversampling_read > 0:
-        offset = int(dims[2]) / 4
-        fft = fft[int(offset) : int(3 * offset), :, :]
     log.info(f"FFT shape = {fft.shape}")
     log.info(f"FFT abs min = {np.min(np.abs(fft))}")
     log.info(f"FFT abs max = {np.max(np.abs(fft))}")
     log.info(f"FFT abs mean = {np.mean(np.abs(fft))}")
     log.info(f"FFT contains NaN = {np.isnan(fft).any()}")
+
     for i in range(fft.shape[2]):
         log.info(
             f"Slice {i}: "

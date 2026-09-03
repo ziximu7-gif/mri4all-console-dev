@@ -112,6 +112,7 @@ def reconstruct_cartesian_3d_complex(
     )
 
     images = []
+    kspaces = []
 
     for echo_index in range(echo_count):
 
@@ -159,6 +160,7 @@ def reconstruct_cartesian_3d_complex(
                     1j * adc_phase
                 )
             )
+        kspaces.append(kspace)
 
         image = np.fft.fftshift(
             np.fft.fftn(
@@ -188,31 +190,15 @@ def reconstruct_cartesian_3d_complex(
                 * 1j
             )
 
-        if (
-            oversampling_read
-            and oversampling_read > 1
-        ):
-            target_readout = (
-                num_readout
-                // oversampling_read
-            )
-
-            start = (
-                num_readout
-                - target_readout
-            ) // 2
-
-            end = (
-                start
-                + target_readout
-            )
+        if oversampling_read > 0:
+            offset = num_readout / 4
 
             image = image[
-                start:end,
+                int(offset):int(3 * offset),
                 :,
                 :,
             ]
 
         images.append(image)
 
-    return images
+    return images, kspaces
