@@ -1010,7 +1010,44 @@ class ExaminationWindow(QMainWindow):
                 self.otherParametersTextEdit.toPlainText()
             )
             # Store the current exam planning geometry with the scan task.
-            
+            if (
+                ui_runtime.editor_scantask.sequence
+                == "adj_b0_map"
+            ):
+                if self.planning_scan_path:
+                    planning_task = task.read_task(
+                        self.planning_scan_path
+                    )
+
+                    if planning_task:
+                        planning = planning_task.other.get(
+                            "planning"
+                        )
+
+                        if (
+                            planning
+                            and "shim_box" in planning
+                        ):
+                            ui_runtime.editor_scantask.other[
+                                "planning"
+                            ] = {
+                                "shim_box": planning[
+                                    "shim_box"
+                                ]
+                            }
+                        else:
+                            log.warning(
+                                "Localizer has no saved shim box."
+                            )
+                    else:
+                        log.warning(
+                            "Unable to read planning localizer."
+                        )
+                else:
+                    log.warning(
+                        "No planning localizer is available "
+                        "for B0 mapping."
+                    )
             self.store_seqparam_from_ui(ui_runtime.editor_scantask)
             ui_runtime.editor_scantask.journal.prepared_at = helper.get_datetime()
             task.write_task(scan_path, ui_runtime.editor_scantask)
