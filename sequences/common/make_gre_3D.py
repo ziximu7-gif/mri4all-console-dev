@@ -29,7 +29,29 @@ def pypulseq_gre3D(
     alpha1_duration = 80e-6
 
     TR = inputs["TR"] / 1000
-    TE = inputs["TE"] / 1000
+
+    echo_times = inputs.get(
+        "echo_times",
+        [inputs["TE"]],
+    )
+
+    if len(echo_times) not in (1, 2):
+        log.error(
+            "GRE currently supports one or two echoes."
+        )
+        return False
+
+    echo_times = [
+        float(te) / 1000
+        for te in echo_times
+    ]
+
+    TE1 = echo_times[0]
+    TE2 = (
+        echo_times[1]
+        if len(echo_times) == 2
+        else None
+    )
 
     fovx = inputs["FOV"] / 1000
     fovy = inputs["FOV"] / 1000
@@ -129,6 +151,12 @@ def pypulseq_gre3D(
     )
     gx_pre.amplitude = -gx_pre.amplitude
 
+    gx_rewind = pp.make_trapezoid(
+        channel=ch0,
+        area=-gx.area,
+        system=system,
+    )
+
     pe_order = choose_pe_order(
         ndims=3,
         npe=[dim0, dim1],
@@ -175,13 +203,13 @@ def pypulseq_gre3D(
         system=system,
     )
 
-    if TE == 0:
+    if TE1 == 0:
         tau1 = (
             10
             * seq.grad_raster_time
         )
 
-        TE = (
+        TE1 = (
             tau1
             + 0.5 * pp.calc_duration(rf1)
             + pre_duration
@@ -191,7 +219,7 @@ def pypulseq_gre3D(
         tau1 = (
             math.ceil(
                 (
-                    TE
+                    TE1
                     - 0.5 * pp.calc_duration(rf1)
                     - pre_duration
                     - 0.5 * pp.calc_duration(gx)
@@ -201,12 +229,46 @@ def pypulseq_gre3D(
             * seq.grad_raster_time
         )
 
+    tau2 = None
+
+    if TE2 is not None:
+        if TE2 <= TE1:
+            log.error(
+                "TE2 must be greater than TE1."
+            )
+            return False
+
+        tau2 = (
+            math.ceil(
+                (
+                    TE2
+                    - TE1
+                    - pp.calc_duration(gx)
+                    - pp.calc_duration(gx_rewind)
+                )
+                / seq.grad_raster_time
+            )
+            * seq.grad_raster_time
+        )
+
+        if tau2 < 0:
+            log.error(
+                "TE2 is too short for the second GRE echo."
+            )
+            return False
+        
+    last_TE = (
+        TE2
+        if TE2 is not None
+        else TE1
+    )
+
     delay_TR = (
         math.ceil(
             (
                 TR
                 - 0.5 * pp.calc_duration(rf1)
-                - TE
+                - last_TE
                 - 0.5 * pp.calc_duration(gx)
                 - pp.calc_duration(gx_spoil)
             )
@@ -216,8 +278,11 @@ def pypulseq_gre3D(
     )
 
     assert np.all(tau1 >= 0)
-    assert np.all(delay_TR >= 0)
 
+    if tau2 is not None:
+        assert np.all(tau2 >= 0)
+
+    assert np.all(delay_TR >= 0)
     adc_phase = []
 
     rfspoil_phase = 0
@@ -305,6 +370,29 @@ def pypulseq_gre3D(
                 adc_phase.append(
                     rfspoil_phase
                 )
+            if TE2 is not None:
+                seq.add_block(
+                    gx_rewind
+                )
+
+                if tau2 > 0:
+                    seq.add_block(
+                        pp.make_delay(tau2)
+                    )
+
+                if is_dummyshot:
+                    seq.add_block(
+                        gx
+                    )
+                else:
+                    seq.add_block(
+                        gx,
+                        adc,
+                    )
+
+                    adc_phase.append(
+                        rfspoil_phase
+                    )
 
             gy_pre.amplitude = (
                 -gy_pre.amplitude
