@@ -16,6 +16,7 @@ import common.helper as helper
 
 from common.geometry import (
     planning_box_to_scan_geometry,
+    resolve_encoding_geometry,
 )
 
 log = logger.get_logger()
@@ -238,8 +239,18 @@ class SequenceGRE_3D(PulseqSequence, registry_key=Path(__file__).stem):
                 scan_task
             )
         )
+        planned_encoding = None
 
         if planned_geometry is not None:
+            planned_encoding = (
+                resolve_encoding_geometry(
+                    scan_geometry=planned_geometry,
+                    orientation=(
+                        self.param_orientation
+                    ),
+                )
+            )
+
             scan_task.other[
                 "resolved_geometry"
             ] = (

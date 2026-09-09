@@ -3,8 +3,21 @@ from typing import Mapping, Sequence
 
 import numpy as np
 
+MM_TO_M = 1e-3
 CM_TO_M = 1e-2
 CM_TO_MM = 10.0
+
+def mm_to_m(value):
+    if np.isscalar(value):
+        return float(value) * MM_TO_M
+
+    return (
+        np.asarray(
+            value,
+            dtype=float,
+        )
+        * MM_TO_M
+    )
 
 def cm_to_m(value):
     if np.isscalar(value):
@@ -75,7 +88,8 @@ class ScanGeometry:
         FOV center in scanner X/Y/Z coordinates [m].
 
     fov_local_m:
-        FOV dimensions along the local read/phase/third axes [m].
+        FOV dimensions along the box-local
+        X/Y/Z axes [m].
 
     rotation_local_to_scanner:
         3x3 rotation matrix mapping local FOV axes into
@@ -109,6 +123,47 @@ def orientation_channels(
         raise ValueError(
             f"Unsupported orientation: {orientation}"
         ) from exc
+    
+_AXIS_UNIT_VECTORS = {
+    "x": np.array(
+        [1.0, 0.0, 0.0],
+        dtype=float,
+    ),
+    "y": np.array(
+        [0.0, 1.0, 0.0],
+        dtype=float,
+    ),
+    "z": np.array(
+        [0.0, 0.0, 1.0],
+        dtype=float,
+    ),
+}
+
+
+def orientation_encoding_matrix(
+    orientation: str,
+) -> np.ndarray:
+    """
+    Map logical GRE axes:
+
+        read, phase, third
+
+    into box-local X/Y/Z axes.
+
+    This is an encoding-axis matrix, not
+    necessarily a proper 3D rotation matrix.
+    """
+
+    channels = orientation_channels(
+        orientation
+    )
+
+    return np.column_stack(
+        [
+            _AXIS_UNIT_VECTORS[channel]
+            for channel in channels
+        ]
+    )
 
 
 def orientation_plane_axes(
@@ -262,4 +317,75 @@ def planning_box_to_scan_geometry(
         center_scanner_m=center_scanner_m,
         fov_local_m=fov_local_m,
         rotation_local_to_scanner=rotation,
+    )
+@dataclass
+class EncodingGeometry:
+    """
+    GRE encoding geometry.
+
+    fov_logical_m:
+        FOV along logical read/phase/third
+        directions [m].
+
+    logical_to_scanner:
+        Maps logical read/phase/third gradient
+        vectors into physical scanner X/Y/Z.
+    """
+
+    fov_logical_m: np.ndarray
+    logical_to_scanner: np.ndarray
+
+    def as_dict(self):
+        return {
+            "fov_logical_m": (
+                self.fov_logical_m.tolist()
+            ),
+            "logical_to_scanner": (
+                self.logical_to_scanner.tolist()
+            ),
+        }
+def resolve_encoding_geometry(
+    scan_geometry: ScanGeometry,
+    orientation: str,
+) -> EncodingGeometry:
+
+    encoding_matrix = (
+        orientation_encoding_matrix(
+            orientation
+        )
+    )
+
+    box_fov_m = np.asarray(
+        scan_geometry.fov_local_m,
+        dtype=float,
+    )
+
+    if box_fov_m.shape != (3,):
+        raise ValueError(
+            "Scan FOV must contain X/Y/Z"
+        )
+
+    # Convert box X/Y/Z dimensions into
+    # logical read/phase/third dimensions.
+    fov_logical_m = (
+        np.abs(
+            encoding_matrix
+        ).T
+        @ box_fov_m
+    )
+
+    # Logical encoding axes
+    # -> box-local axes
+    # -> scanner physical axes
+    logical_to_scanner = (
+        scan_geometry
+        .rotation_local_to_scanner
+        @ encoding_matrix
+    )
+
+    return EncodingGeometry(
+        fov_logical_m=fov_logical_m,
+        logical_to_scanner=(
+            logical_to_scanner
+        ),
     )

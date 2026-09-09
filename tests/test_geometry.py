@@ -1,12 +1,22 @@
 import numpy as np
 
 from common.geometry import (
+    ScanGeometry,
     cm_to_m,
     cm_to_mm,
+    mm_to_m,
     orientation_channels,
+    orientation_encoding_matrix,
     planning_box_to_scan_geometry,
     planning_euler_to_matrix,
+    resolve_encoding_geometry,
 )
+
+def test_mm_to_m():
+    np.testing.assert_allclose(
+        mm_to_m(200.0),
+        0.2,
+    )
 
 def test_cm_to_m():
     np.testing.assert_allclose(
@@ -154,4 +164,82 @@ def test_rotation_matrix():
         np.linalg.det(rotation),
         1.0,
         atol=1e-12,
+    )
+def test_orientation_encoding_matrix():
+
+    axial = (
+        orientation_encoding_matrix(
+            "Axial"
+        )
+    )
+
+    np.testing.assert_allclose(
+        axial,
+        np.eye(3),
+    )
+
+    coronal = (
+        orientation_encoding_matrix(
+            "Coronal"
+        )
+    )
+
+    np.testing.assert_allclose(
+        coronal,
+        np.array(
+            [
+                [1.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0],
+                [0.0, 1.0, 0.0],
+            ]
+        ),
+    )
+
+    sagittal = (
+        orientation_encoding_matrix(
+            "Sagittal"
+        )
+    )
+
+    np.testing.assert_allclose(
+        sagittal,
+        np.array(
+            [
+                [0.0, 0.0, 1.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+            ]
+        ),
+    )
+    
+def test_coronal_encoding_geometry():
+
+    scan_geometry = ScanGeometry(
+        center_scanner_m=np.zeros(3),
+        fov_local_m=np.array(
+            [
+                0.12,
+                0.10,
+                0.08,
+            ]
+        ),
+        rotation_local_to_scanner=(
+            np.eye(3)
+        ),
+    )
+
+    encoding = (
+        resolve_encoding_geometry(
+            scan_geometry=scan_geometry,
+            orientation="Coronal",
+        )
+    )
+
+    np.testing.assert_allclose(
+        encoding.fov_logical_m,
+        [
+            0.12,
+            0.08,
+            0.10,
+        ],
     )
