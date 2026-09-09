@@ -3,32 +3,32 @@ from typing import Mapping, Sequence
 
 import numpy as np
 
-MM_TO_M = 1e-3
+CM_TO_M = 1e-2
+CM_TO_MM = 10.0
 
-
-def mm_to_m(value):
+def cm_to_m(value):
     if np.isscalar(value):
-        return float(value) * MM_TO_M
+        return float(value) * CM_TO_M
 
     return (
         np.asarray(
             value,
             dtype=float,
         )
-        * MM_TO_M
+        * CM_TO_M
     )
 
 
-def m_to_mm(value):
+def cm_to_mm(value):
     if np.isscalar(value):
-        return float(value) / MM_TO_M
+        return float(value) * CM_TO_MM
 
     return (
         np.asarray(
             value,
             dtype=float,
         )
-        / MM_TO_M
+        * CM_TO_MM
     )
 # ---------------------------------------------------------
 # Scanner coordinate convention

@@ -1,11 +1,25 @@
 import numpy as np
 
 from common.geometry import (
+    cm_to_m,
+    cm_to_mm,
     orientation_channels,
     planning_box_to_scan_geometry,
     planning_euler_to_matrix,
 )
 
+def test_cm_to_m():
+    np.testing.assert_allclose(
+        cm_to_m(20.0),
+        0.2,
+    )
+
+
+def test_cm_to_mm():
+    np.testing.assert_allclose(
+        cm_to_mm(20.0),
+        200.0,
+    )
 
 def test_orientation_channels():
     assert (

@@ -6,8 +6,8 @@ import external.seq.adjustments_acq.config as cfg
 
 from sequences.common import view_traj
 import common.logger as logger
-
 from common.geometry import (
+    cm_to_m,
     orientation_channels,
 )
 
@@ -40,7 +40,9 @@ def pypulseq_se2D(
     TE = inputs["TE"] / 1000
     num_averages = inputs["NSA"]
     Orientation = inputs["Orientation"]
-    fov = inputs["FOV"] / 1000
+    fov = cm_to_m(
+        inputs["FOV"]
+    )
     Nx = inputs["Base_Resolution"]
     BW = inputs["BW"]
     visualize = inputs["view_traj"]

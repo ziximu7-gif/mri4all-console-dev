@@ -37,7 +37,9 @@ from services.ui.custommessagebox import CustomMessageBox  # type: ignore
 import services.ui.control as control
 
 from services.ui.errors import SequenceUIFailed, UIException
-
+from common.geometry import (
+    cm_to_mm,
+)
 import external.seq.adjustments_acq.config as cfg
 
 log = logger.get_logger()
@@ -1143,7 +1145,11 @@ class ExaminationWindow(QMainWindow):
 
         try:
             localizer_fov_mm = float(
-                planning_task.parameters["FOV"]
+                cm_to_mm(
+                    planning_task.parameters[
+                        "FOV"
+                    ]
+                )
             )
         except (KeyError, TypeError, ValueError):
             log.error(

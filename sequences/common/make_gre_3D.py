@@ -8,6 +8,7 @@ from sequences.common.get_trajectory import choose_pe_order
 from common.constants import *
 import common.logger as logger
 from common.geometry import (
+    cm_to_m,
     orientation_channels,
 )
 
@@ -55,11 +56,15 @@ def pypulseq_gre3D(
         else None
     )
 
-    fovx = inputs["FOV"] / 1000
-    fovy = inputs["FOV"] / 1000
+    base_fov_m = cm_to_m(
+        inputs["FOV"]
+    )
 
-    # TODO: Expose FOV in Z independently.
-    fovz = inputs["FOV"] / 1000 / 2
+    fovx = base_fov_m
+    fovy = base_fov_m
+
+    # Preserve current GRE Z-FOV behavior for now.
+    fovz = base_fov_m / 2.0
 
     Nx = inputs["baseresolution"]
     Ny = inputs["baseresolution"]
