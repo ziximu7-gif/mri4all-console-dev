@@ -14,6 +14,10 @@ import common.logger as logger
 from common.types import ResultItem
 import common.helper as helper
 
+from common.geometry import (
+    planning_box_to_scan_geometry,
+)
+
 log = logger.get_logger()
 
 from common.ipc import Communicator
@@ -165,10 +169,92 @@ class SequenceGRE_3D(PulseqSequence, registry_key=Path(__file__).stem):
         if self.param_TE > self.param_TR:
             self.problem_list.append("TE cannot be longer than TR")
         return self.is_valid()
+    def resolve_planned_geometry(
+        self,
+        scan_task,
+    ):
+        geometry_data = (
+            scan_task.other.get(
+                "geometry"
+            )
+        )
+
+        if not isinstance(
+            geometry_data,
+            dict,
+        ):
+            return None
+
+        fov_box = geometry_data.get(
+            "fov_box"
+        )
+
+        reference_fov_mm = (
+            geometry_data.get(
+                "reference_fov_mm"
+            )
+        )
+
+        if not isinstance(
+            fov_box,
+            dict,
+        ):
+            return None
+
+        if reference_fov_mm is None:
+            return None
+
+        coordinate_system = (
+            geometry_data.get(
+                "coordinate_system"
+            )
+        )
+
+        if (
+            coordinate_system
+            != "scanner_xyz_v1"
+        ):
+            log.warning(
+                "Unsupported planning coordinate "
+                "system: "
+                + str(coordinate_system)
+            )
+            return None
+
+        return (
+            planning_box_to_scan_geometry(
+                fov_box=fov_box,
+                reference_fov_mm=(
+                    reference_fov_mm
+                ),
+            )
+        )
 
     def calculate_sequence(self, scan_task) -> bool:
         log.info("Calculating sequence " + self.get_name())
         ipc_comm.send_status(f"Calculating sequence...")
+        planned_geometry = (
+            self.resolve_planned_geometry(
+                scan_task
+            )
+        )
+
+        if planned_geometry is not None:
+            scan_task.other[
+                "resolved_geometry"
+            ] = (
+                planned_geometry.as_dict()
+            )
+
+            log.info(
+                "Resolved planned FOV geometry: "
+                + str(
+                    scan_task.other[
+                        "resolved_geometry"
+                    ]
+                )
+            )
+
 
         scan_task.processing.recon_mode = "basic3d"
         scan_task.processing.dim = 3

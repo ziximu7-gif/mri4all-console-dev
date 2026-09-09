@@ -7,7 +7,9 @@ import pypulseq as pp
 from sequences.common.get_trajectory import choose_pe_order
 from common.constants import *
 import common.logger as logger
-
+from common.geometry import (
+    orientation_channels,
+)
 
 log = logger.get_logger()
 
@@ -87,22 +89,11 @@ def pypulseq_gre3D(
     adc_dwell = 1 / BW
     adc_duration = Nx * adc_dwell
 
-    ch0 = "x"
-    ch1 = "y"
-    ch2 = "z"
-
-    if orientation == "Axial":
-        ch0 = "x"
-        ch1 = "y"
-        ch2 = "z"
-    elif orientation == "Sagittal":
-        ch0 = "x"
-        ch1 = "z"
-        ch2 = "y"
-    elif orientation == "Coronal":
-        ch0 = "y"
-        ch1 = "z"
-        ch2 = "x"
+    ch0, ch1, ch2 = (
+        orientation_channels(
+            orientation
+        )
+    )
 
     seq = pp.Sequence()
     n_shots = int(Ny * Nz)

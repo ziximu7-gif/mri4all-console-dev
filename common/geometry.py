@@ -7,11 +7,29 @@ MM_TO_M = 1e-3
 
 
 def mm_to_m(value):
-    return value * MM_TO_M
+    if np.isscalar(value):
+        return float(value) * MM_TO_M
+
+    return (
+        np.asarray(
+            value,
+            dtype=float,
+        )
+        * MM_TO_M
+    )
 
 
 def m_to_mm(value):
-    return value / MM_TO_M
+    if np.isscalar(value):
+        return float(value) / MM_TO_M
+
+    return (
+        np.asarray(
+            value,
+            dtype=float,
+        )
+        / MM_TO_M
+    )
 # ---------------------------------------------------------
 # Scanner coordinate convention
 # ---------------------------------------------------------
@@ -179,12 +197,8 @@ def planning_box_to_scan_geometry(
       - reference FOV is given in millimeters
     """
 
-    reference_fov_m = (
-        np.asarray(
-            reference_fov_mm,
-            dtype=float,
-        )
-        / 1000.0
+    reference_fov_m = mm_to_m(
+        reference_fov_mm
     )
 
     if reference_fov_m.shape != (3,):
