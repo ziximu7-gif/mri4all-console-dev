@@ -82,10 +82,31 @@ def process_acquisition(scan_name: str) -> bool:
     )
 
     try:
-        # TODO: Replace with better management of scanner settings
+        # Reload scanner configuration before acquisition.
         cfg.update()
-    except:
-        log.warn("Unable to update configuration")
+    except Exception:
+        log.exception(
+            "Unable to update acquisition configuration. "
+            "Using current in-memory scanner settings."
+        )
+
+    # Record the baseline shim used for this acquisition.
+    scan_task.adjustment.shim.shim_x = float(
+        cfg.SHIM_X
+    )
+    scan_task.adjustment.shim.shim_y = float(
+        cfg.SHIM_Y
+    )
+    scan_task.adjustment.shim.shim_z = float(
+        cfg.SHIM_Z
+    )
+
+    log.info(
+        "Acquisition shim snapshot: "
+        f"x={scan_task.adjustment.shim.shim_x:.6f}, "
+        f"y={scan_task.adjustment.shim.shim_y:.6f}, "
+        f"z={scan_task.adjustment.shim.shim_z:.6f}"
+    )
 
     current_step = ""
     try:

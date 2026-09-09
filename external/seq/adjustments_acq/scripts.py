@@ -30,20 +30,19 @@ from common.ipc import Communicator
 ipc_comm = Communicator(Communicator.ACQ)
 
 
-# TODO: Remove references to cfg class from here
 def run_pulseq(
     seq_file,
-    rf_center=cfg.LARMOR_FREQ,
-    rf_max=cfg.RF_MAX,
-    gx_max=cfg.GX_MAX,
-    gy_max=cfg.GY_MAX,
-    gz_max=cfg.GZ_MAX,
+    rf_center=None,
+    rf_max=None,
+    gx_max=None,
+    gy_max=None,
+    gz_max=None,
     tx_t=1,
     grad_t=10,
     tx_warmup=100,
-    shim_x=cfg.SHIM_X,
-    shim_y=cfg.SHIM_Y,
-    shim_z=cfg.SHIM_Z,
+    shim_x=None,
+    shim_y=None,
+    shim_z=None,
     grad_cal=False,
     save_np=False,
     save_mat=False,
@@ -80,6 +79,24 @@ def run_pulseq(
         numpy.ndarray: Rx data array
         float: (us) Rx period
     """
+    if rf_center is None:
+        rf_center = cfg.LARMOR_FREQ
+    if rf_max is None:
+        rf_max = cfg.RF_MAX
+    if gx_max is None:
+        gx_max = cfg.GX_MAX
+    if gy_max is None:
+        gy_max = cfg.GY_MAX
+    if gz_max is None:
+        gz_max = cfg.GZ_MAX
+
+    if shim_x is None:
+        shim_x = cfg.SHIM_X
+    if shim_y is None:
+        shim_y = cfg.SHIM_Y
+    if shim_z is None:
+        shim_z = cfg.SHIM_Z
+
     log.info(f"Pulseq scan with Larmor {rf_center}")
 
     log.debug("Running flocra_pulseq using following parameters:")
@@ -91,7 +108,6 @@ def run_pulseq(
     log.debug(f"shim_x={shim_x}")
     log.debug(f"shim_y={shim_y}")
     log.debug(f"shim_z={shim_z}")
-    log.debug(f"Seq file={seq_file}")
 
     print(f"case path = {case_path}")
 

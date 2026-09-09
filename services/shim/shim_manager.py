@@ -1,8 +1,24 @@
 import json
+import math
 from pathlib import Path
+
+import common.logger as logger
 
 from external.seq.adjustments_acq.shim_conversion import (
     b0_fit_to_shim_delta,
+)
+from sequences.common.util import (
+    reading_json_parameter,
+    writing_json_parameter,
+)
+
+
+log = logger.get_logger()
+
+SHIM_KEYS = (
+    "shim_x",
+    "shim_y",
+    "shim_z",
 )
 
 
@@ -30,29 +46,81 @@ def load_shim_calibration():
     return data["matrix"]
 
 
-
-def calculate_shim_correction(
-    b0_fit,
-):
+def calculate_shim_correction(b0_fit):
     """
-    Convert first-order B0 fit result
-    into shim correction commands.
+    Convert first-order B0 fit [Hz/m]
+    into normalized shim delta.
     """
 
-    calibration_matrix = (
-        load_shim_calibration()
-    )
+    calibration_matrix = load_shim_calibration()
 
     return b0_fit_to_shim_delta(
         b0_fit,
         calibration_matrix,
     )
-def apply_shim_to_task(
-    task,
-):
+
+
+def _task_shim_snapshot(task):
     """
-    Calculate shim correction and store
-    it into ScanTask.
+    Shim values actually used when this task was acquired.
+    """
+
+    return {
+        "shim_x": float(
+            task.adjustment.shim.shim_x
+        ),
+        "shim_y": float(
+            task.adjustment.shim.shim_y
+        ),
+        "shim_z": float(
+            task.adjustment.shim.shim_z
+        ),
+    }
+
+
+def _config_shim(config_data):
+    return {
+        "shim_x": float(
+            config_data.shim_parameters.shim_x
+        ),
+        "shim_y": float(
+            config_data.shim_parameters.shim_y
+        ),
+        "shim_z": float(
+            config_data.shim_parameters.shim_z
+        ),
+    }
+
+
+def _validate_absolute_shim(shim_values):
+    """
+    Basic normalized shim validation.
+
+    Final combined gradient + shim limit is still
+    checked by scripts.py::shim().
+    """
+
+    for key, value in shim_values.items():
+
+        if not math.isfinite(value):
+            raise ValueError(
+                f"{key} is not finite: {value}"
+            )
+
+        if abs(value) >= 1.0:
+            raise ValueError(
+                f"{key}={value} exceeds "
+                "normalized shim range (-1, 1)."
+            )
+
+
+def process_b0_shim(task):
+    """
+    Convert B0 fit into a shim correction and persist
+    the resulting absolute scanner shim.
+
+    task.adjustment.shim is treated as the acquisition
+    snapshot and is NOT modified.
     """
 
     if "b0_fit" not in task.other:
@@ -64,38 +132,64 @@ def apply_shim_to_task(
         task.other["b0_fit"]
     )
 
-    task.other[
-        "shim_correction"
-    ] = correction
+    # The shim that was actually active during B0 acquisition.
+    before = _task_shim_snapshot(task)
 
-    return correction
+    # Read current persisted scanner state.
+    config_data = reading_json_parameter()
+    current = _config_shim(config_data)
 
-def apply_shim_correction(
-    task,
-):
-    """
-    Apply shim correction to current shim state.
-    """
+    # Do not apply a correction derived from stale acquisition
+    # conditions if someone changed shim in the meantime.
+    for key in SHIM_KEYS:
+        if not math.isclose(
+            current[key],
+            before[key],
+            rel_tol=0.0,
+            abs_tol=1e-9,
+        ):
+            raise RuntimeError(
+                "Scanner shim changed after B0 acquisition. "
+                f"{key}: acquired={before[key]}, "
+                f"current={current[key]}. "
+                "Refusing to apply stale B0 correction."
+            )
 
-    correction = task.other.get(
-        "shim_correction"
+    after = {
+        key: before[key] + correction[key]
+        for key in SHIM_KEYS
+    }
+
+    _validate_absolute_shim(after)
+
+    config_data.shim_parameters.shim_x = (
+        after["shim_x"]
+    )
+    config_data.shim_parameters.shim_y = (
+        after["shim_y"]
+    )
+    config_data.shim_parameters.shim_z = (
+        after["shim_z"]
     )
 
-    if correction is None:
-        raise ValueError(
-            "No shim correction found."
-        )
-
-    task.adjustment.shim.shim_x += (
-        correction["shim_x"]
+    writing_json_parameter(
+        config_data=config_data
     )
 
-    task.adjustment.shim.shim_y += (
-        correction["shim_y"]
+    result = {
+        "before": before,
+        "delta": correction,
+        "after": after,
+    }
+
+    task.other["shim_correction"] = correction
+    task.other["shim_result"] = result
+
+    log.info(
+        "Applied first-order B0 shim correction: "
+        f"before={before}, "
+        f"delta={correction}, "
+        f"after={after}"
     )
 
-    task.adjustment.shim.shim_z += (
-        correction["shim_z"]
-    )
-
-    return task.adjustment.shim
+    return result

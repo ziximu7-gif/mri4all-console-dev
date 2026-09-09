@@ -26,6 +26,9 @@ import services.recon.reconstruction as reconstruction
 from common.types import ScanTask
 import common.plotting as plotting
 import common.config as config
+from services.shim.shim_manager import (
+    process_b0_shim,
+)
 
 main_loop = None  # type: helper.AsyncTimer # type: ignore
 
@@ -83,6 +86,43 @@ def process_reconstruction(scan_name: str) -> bool:
         log.info("Reconstruction failed.")
         move_to_fail(scan_name)
         return False
+
+    # B0 reconstruction produces the first-order field fit.
+    # Convert it into an absolute scanner shim only after
+    # reconstruction has completed successfully.
+    if scan_task.processing.recon_mode == "b0_map":
+        try:
+            shim_result = process_b0_shim(
+                scan_task
+            )
+
+            log.info(
+                "B0 shim processing completed: "
+                f"{shim_result}"
+            )
+
+        except Exception as e:
+            log.exception(
+                "Failed to apply B0 shim correction."
+            )
+            log.exception(e)
+
+            scan_task.journal.fail_stage = (
+                "adjustment"
+            )
+            scan_task.journal.failed_at = (
+                helper.get_datetime()
+            )
+
+            task.write_task(
+                mri4all_paths.DATA_RECON
+                + "/"
+                + scan_name,
+                scan_task,
+            )
+
+            move_to_fail(scan_name)
+            return False
 
     # Store the updated scan task
     # TODO: Add error handling

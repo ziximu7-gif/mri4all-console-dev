@@ -253,13 +253,10 @@ class SequenceTSE_3D(PulseqSequence, registry_key=Path(__file__).stem):
             tx_t=1,
             grad_t=10,
             tx_warmup=100,
-            # TODO: Debug values used here
-            # shim_x=-0.01,
-            # shim_y=-0.01,
-            # shim_z=-0.01,
-            shim_x=0.0,
-            shim_y=0.0,
-            shim_z=0.0,
+    
+            shim_x=cfg.SHIM_X,
+            shim_y=cfg.SHIM_Y,
+            shim_z=cfg.SHIM_Z,
             grad_cal=False,
             save_np=True,
             save_mat=False,
