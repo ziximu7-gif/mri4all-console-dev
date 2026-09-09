@@ -200,7 +200,7 @@ def pypulseq_gre3D(
     planned_fov_m = inputs.get(
         "planned_fov_m"
     )
-    planned_rotation_matrix = (
+    logical_to_scanner = (
         inputs.get(
             "logical_to_scanner"
         )
@@ -326,8 +326,8 @@ def pypulseq_gre3D(
     adc_duration = Nx * adc_dwell
 
     if logical_to_scanner is not None:
-    # Build the sequence first in logical
-    # read/phase/third coordinates.
+        # Build the sequence first in logical
+        # read/phase/third coordinates.
         ch0 = "x"
         ch1 = "y"
         ch2 = "z"
@@ -631,6 +631,7 @@ def pypulseq_gre3D(
                     rfspoil_phase
                 )
             if TE2 is not None:
+                # Rewind readout k-space after echo 1.
                 _add_gradient_block(
                     seq=seq,
                     gradients=[
@@ -647,27 +648,33 @@ def pypulseq_gre3D(
                         pp.make_delay(tau2)
                     )
 
+                # Acquire echo 2 with the same
+                # forward readout gradient.
                 if is_dummyshot:
                     _add_gradient_block(
                         seq=seq,
                         gradients=[
-                            gx_rewind,
+                            gx,
                         ],
                         logical_to_scanner=(
                             logical_to_scanner
                         ),
                         system=system,
                     )
+
                 else:
                     _add_gradient_block(
                         seq=seq,
                         gradients=[
-                            gx_rewind,
+                            gx,
                         ],
                         logical_to_scanner=(
                             logical_to_scanner
                         ),
                         system=system,
+                        extra_events=[
+                            adc,
+                        ],
                     )
 
                     adc_phase.append(
