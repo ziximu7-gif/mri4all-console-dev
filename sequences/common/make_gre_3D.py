@@ -11,10 +11,151 @@ from common.geometry import (
     cm_to_m,
     orientation_channels,
 )
+from pypulseq.add_gradients import (
+    add_gradients,
+)
+from pypulseq.scale_grad import (
+    scale_grad,
+)
 
 log = logger.get_logger()
+_GRADIENT_AXES = (
+    "x",
+    "y",
+    "z",
+)
+
+_GRADIENT_AXIS_INDEX = {
+    "x": 0,
+    "y": 1,
+    "z": 2,
+}
 
 
+def _transform_gradient_events(
+    gradients,
+    logical_to_scanner,
+    system,
+):
+    """
+    Transform logical X/Y/Z gradient events
+    into physical scanner X/Y/Z gradients.
+
+    G_scanner = M @ G_logical
+    """
+
+    contributions = {
+        "x": [],
+        "y": [],
+        "z": [],
+    }
+
+    for gradient in gradients:
+        if gradient is None:
+            continue
+
+        if gradient.type not in (
+            "trap",
+            "grad",
+        ):
+            raise ValueError(
+                "Only gradient events can "
+                "be transformed."
+            )
+
+        logical_axis_index = (
+            _GRADIENT_AXIS_INDEX[
+                gradient.channel
+            ]
+        )
+
+        for (
+            scanner_axis_index,
+            scanner_axis,
+        ) in enumerate(
+            _GRADIENT_AXES
+        ):
+            coefficient = float(
+                logical_to_scanner[
+                    scanner_axis_index,
+                    logical_axis_index,
+                ]
+            )
+
+            if abs(coefficient) < 1e-12:
+                continue
+
+            transformed = scale_grad(
+                grad=gradient,
+                scale=coefficient,
+            )
+
+            transformed.channel = (
+                scanner_axis
+            )
+
+            contributions[
+                scanner_axis
+            ].append(
+                transformed
+            )
+
+    scanner_gradients = []
+
+    for scanner_axis in (
+        _GRADIENT_AXES
+    ):
+        axis_gradients = (
+            contributions[
+                scanner_axis
+            ]
+        )
+
+        if not axis_gradients:
+            continue
+
+        scanner_gradients.append(
+            add_gradients(
+                grads=axis_gradients,
+                system=system,
+            )
+        )
+
+    return scanner_gradients
+def _add_gradient_block(
+    seq,
+    gradients,
+    logical_to_scanner,
+    system,
+    extra_events=None,
+):
+    if logical_to_scanner is None:
+        output_gradients = list(
+            gradients
+        )
+    else:
+        output_gradients = (
+            _transform_gradient_events(
+                gradients=gradients,
+                logical_to_scanner=(
+                    logical_to_scanner
+                ),
+                system=system,
+            )
+        )
+
+    events = list(
+        output_gradients
+    )
+
+    if extra_events is not None:
+        events.extend(
+            extra_events
+        )
+
+    seq.add_block(
+        *events
+    )
 def pypulseq_gre3D(
     inputs,
     check_timing,
@@ -61,9 +202,21 @@ def pypulseq_gre3D(
     )
     planned_rotation_matrix = (
         inputs.get(
-            "planned_rotation_matrix"
+            "logical_to_scanner"
         )
     )
+
+    if (
+        (planned_fov_m is None)
+        !=
+        (logical_to_scanner is None)
+    ):
+        log.error(
+            "planned_fov_m and "
+            "logical_to_scanner must "
+            "be provided together."
+        )
+        return False
 
     if planned_fov_m is not None:
         planned_fov_m = np.asarray(
@@ -113,46 +266,33 @@ def pypulseq_gre3D(
         # Preserve legacy GRE Z behavior.
         fovz = base_fov_m / 2.0
         
-    if planned_rotation_matrix is not None:
-        planned_rotation_matrix = (
+    if logical_to_scanner is not None:
+        logical_to_scanner = (
             np.asarray(
-                planned_rotation_matrix,
+                logical_to_scanner,
                 dtype=float,
             )
         )
 
         if (
-            planned_rotation_matrix.shape
+            logical_to_scanner.shape
             != (3, 3)
         ):
             log.error(
-                "planned_rotation_matrix "
+                "logical_to_scanner "
                 "must be 3x3."
             )
             return False
 
         if not np.allclose(
-            planned_rotation_matrix.T
-            @ planned_rotation_matrix,
+            logical_to_scanner.T
+            @ logical_to_scanner,
             np.eye(3),
             atol=1e-6,
         ):
             log.error(
-                "planned_rotation_matrix "
-                "is not orthogonal."
-            )
-            return False
-
-        if not np.isclose(
-            np.linalg.det(
-                planned_rotation_matrix
-            ),
-            1.0,
-            atol=1e-6,
-        ):
-            log.error(
-                "planned_rotation_matrix "
-                "must have determinant +1."
+                "logical_to_scanner "
+                "must be orthogonal."
             )
             return False
 
@@ -185,13 +325,14 @@ def pypulseq_gre3D(
     adc_dwell = 1 / BW
     adc_duration = Nx * adc_dwell
 
-    if planned_fov_m is not None:
-        # Planned geometry is already expressed in
-        # absolute scanner XYZ coordinates.
+    if logical_to_scanner is not None:
+    # Build the sequence first in logical
+    # read/phase/third coordinates.
         ch0 = "x"
         ch1 = "y"
         ch2 = "z"
     else:
+        # Legacy non-planned GRE path.
         ch0, ch1, ch2 = (
             orientation_channels(
                 orientation
@@ -443,10 +584,17 @@ def pypulseq_gre3D(
                 system=system,
             )
 
-            seq.add_block(
-                gx_pre,
-                gy_pre,
-                gz_pre,
+            _add_gradient_block(
+                seq=seq,
+                gradients=[
+                    gx_pre,
+                    gy_pre,
+                    gz_pre,
+                ],
+                logical_to_scanner=(
+                    logical_to_scanner
+                ),
+                system=system,
             )
 
             seq.add_block(
@@ -454,19 +602,44 @@ def pypulseq_gre3D(
             )
 
             if is_dummyshot:
-                seq.add_block(gx)
+                _add_gradient_block(
+                    seq=seq,
+                    gradients=[
+                        gx,
+                    ],
+                    logical_to_scanner=(
+                        logical_to_scanner
+                    ),
+                    system=system,
+                )
             else:
-                seq.add_block(
-                    gx,
-                    adc,
+                _add_gradient_block(
+                    seq=seq,
+                    gradients=[
+                        gx,
+                    ],
+                    logical_to_scanner=(
+                        logical_to_scanner
+                    ),
+                    system=system,
+                    extra_events=[
+                        adc,
+                    ],
                 )
 
                 adc_phase.append(
                     rfspoil_phase
                 )
             if TE2 is not None:
-                seq.add_block(
-                    gx_rewind
+                _add_gradient_block(
+                    seq=seq,
+                    gradients=[
+                        gx_rewind,
+                    ],
+                    logical_to_scanner=(
+                        logical_to_scanner
+                    ),
+                    system=system,
                 )
 
                 if tau2 > 0:
@@ -475,13 +648,26 @@ def pypulseq_gre3D(
                     )
 
                 if is_dummyshot:
-                    seq.add_block(
-                        gx
+                    _add_gradient_block(
+                        seq=seq,
+                        gradients=[
+                            gx_rewind,
+                        ],
+                        logical_to_scanner=(
+                            logical_to_scanner
+                        ),
+                        system=system,
                     )
                 else:
-                    seq.add_block(
-                        gx,
-                        adc,
+                    _add_gradient_block(
+                        seq=seq,
+                        gradients=[
+                            gx_rewind,
+                        ],
+                        logical_to_scanner=(
+                            logical_to_scanner
+                        ),
+                        system=system,
                     )
 
                     adc_phase.append(
@@ -496,10 +682,17 @@ def pypulseq_gre3D(
                 -gz_pre.amplitude
             )
 
-            seq.add_block(
-                gx_spoil,
-                gy_pre,
-                gz_pre,
+            _add_gradient_block(
+                seq=seq,
+                gradients=[
+                    gx_spoil,
+                    gy_pre,
+                    gz_pre,
+                ],
+                logical_to_scanner=(
+                    logical_to_scanner
+                ),
+                system=system,
             )
 
             seq.add_block(

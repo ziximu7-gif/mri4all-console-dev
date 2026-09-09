@@ -256,19 +256,50 @@ class SequenceGRE_3D(PulseqSequence, registry_key=Path(__file__).stem):
             ] = (
                 planned_geometry.as_dict()
             )
+
+            scan_task.other[
+                "resolved_encoding"
+            ] = (
+                planned_encoding.as_dict()
+            )
+
             fov_m = (
-                planned_geometry.fov_local_m
+                planned_encoding.fov_logical_m
             )
 
             scan_task.other[
                 "geometry_application"
             ] = {
-                "delta_k_1_per_m": [
+                "fov_size": True,
+                "encoding_orientation": (
+                    self.param_orientation
+                ),
+                "gradient_transform": True,
+                "translation": False,
+                "logical_delta_k_1_per_m": [
                     float(1.0 / fov_m[0]),
                     float(1.0 / fov_m[1]),
                     float(1.0 / fov_m[2]),
                 ],
             }
+
+            log.info(
+                "Resolved planned FOV geometry: "
+                + str(
+                    scan_task.other[
+                        "resolved_geometry"
+                    ]
+                )
+            )
+
+            log.info(
+                "Resolved GRE encoding geometry: "
+                + str(
+                    scan_task.other[
+                        "resolved_encoding"
+                    ]
+                )
+            )
 
             log.info(
                 "Resolved planned FOV geometry: "
@@ -286,7 +317,7 @@ class SequenceGRE_3D(PulseqSequence, registry_key=Path(__file__).stem):
         scan_task.processing.oversampling_read = 2
         self.seq_file_path = self.get_working_folder() + "/seq/acq0.seq"
 
-        if not self.generate_pulseq(planned_geometry=planned_geometry):
+        if not self.generate_pulseq(planned_encoding=planned_encoding):
             log.error("Unable to calculate sequence " + self.get_name())
             return False
 
@@ -345,7 +376,7 @@ class SequenceGRE_3D(PulseqSequence, registry_key=Path(__file__).stem):
 
     def generate_pulseq(
         self,
-        planned_geometry=None,
+        planned_encoding=None,
     ) -> bool:
 
         inputs = {
@@ -366,18 +397,18 @@ class SequenceGRE_3D(PulseqSequence, registry_key=Path(__file__).stem):
             ),
         }
 
-        if planned_geometry is not None:
+        if planned_encoding is not None:
             inputs["planned_fov_m"] = (
-                planned_geometry
-                .fov_local_m
+                planned_encoding
+                .fov_logical_m
                 .tolist()
             )
 
             inputs[
-                "planned_rotation_matrix"
+                "logical_to_scanner"
             ] = (
-                planned_geometry
-                .rotation_local_to_scanner
+                planned_encoding
+                .logical_to_scanner
                 .tolist()
             )
 
