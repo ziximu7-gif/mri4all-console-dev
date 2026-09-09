@@ -7,6 +7,10 @@ import external.seq.adjustments_acq.config as cfg
 from sequences.common import view_traj
 import common.logger as logger
 
+from common.geometry import (
+    orientation_channels,
+)
+
 log = logger.get_logger()
 
 
@@ -49,20 +53,11 @@ def pypulseq_se2D(
     adc_dwell = 1 / BW
     adc_duration = Nx * adc_dwell  # 6.4e-3
 
-    # TODO: coordinate the orientation
-    if Orientation == "Axial":
-        ch0 = "x"
-        ch1 = "y"
-    elif Orientation == "Sagittal":
-        ch0 = "x"
-        ch1 = "z"
-    elif Orientation == "Coronal":
-        ch0 = "y"
-        ch1 = "z"
-    else:
-        raise ValueError(
-            f"Unsupported 2D orientation: {Orientation}"
+    ch0, ch1, ch2 = (
+        orientation_channels(
+            Orientation
         )
+    )
 
     # ======
     # INITIATE SEQUENCE

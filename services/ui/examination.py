@@ -1141,6 +1141,30 @@ class ExaminationWindow(QMainWindow):
             fov_box
         )
 
+        try:
+            localizer_fov_mm = float(
+                planning_task.parameters["FOV"]
+            )
+        except (KeyError, TypeError, ValueError):
+            log.error(
+                "Planning localizer has no valid FOV."
+            )
+            return
+
+        geometry["reference_fov_mm"] = [
+            localizer_fov_mm,
+            localizer_fov_mm,
+            localizer_fov_mm,
+        ]
+
+        geometry["coordinate_system"] = (
+            "scanner_xyz_v1"
+        )
+
+        geometry["reference_origin"] = (
+            "scanner_isocenter"
+        )
+
         self.otherParametersTextEdit.setPlainText(
             json.dumps(
                 other_data,

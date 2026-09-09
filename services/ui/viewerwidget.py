@@ -22,6 +22,10 @@ import matplotlib.pyplot as plt
 import common.logger as logger
 from common.types import ResultTypes, ScanTask, TimeSeriesResult
 from services.ui.spatialbox import PlanningState
+from common.geometry import (
+    orientation_plane_axes,
+    planning_euler_to_matrix,
+)
 
 log = logger.get_logger()
 
@@ -168,17 +172,16 @@ class ViewerWidget(QWidget):
                 horizontal = Y
                 vertical   = Z
         """
+        if self.planning_orientation is None:
+            return None, None
 
-        if self.planning_orientation == "Axial":
-            return "x", "y"
-
-        if self.planning_orientation == "Coronal":
-            return "x", "z"
-
-        if self.planning_orientation == "Sagittal":
-            return "y", "z"
-
-        return None, None
+        try:
+            return orientation_plane_axes(
+                self.planning_orientation
+            )
+        except ValueError:
+            return None, None
+            
     def _projected_box_geometry(self, box):
         """
         Project the rotated 3D box into the current localizer plane.
@@ -186,35 +189,10 @@ class ViewerWidget(QWidget):
             width, height, angle
         Width and height are normalized to the localizer image size.
         """
-        rx = np.deg2rad(box.rotation_x)
-        ry = np.deg2rad(box.rotation_y)
-        rz = np.deg2rad(box.rotation_z)
-
-        cx, sx = np.cos(rx), np.sin(rx)
-        cy, sy = np.cos(ry), np.sin(ry)
-        cz, sz = np.cos(rz), np.sin(rz)
-
-        rotation_x = np.array([
-            [1.0, 0.0, 0.0],
-            [0.0, cx, -sx],
-            [0.0, sx, cx],
-        ])
-        # Sign convention chosen so positive Coronal ROI angle
-        # remains positive in the X-Z viewer.
-        rotation_y = np.array([
-            [cy, 0.0, -sy],
-            [0.0, 1.0, 0.0],
-            [sy, 0.0, cy],
-        ])
-        rotation_z = np.array([
-            [cz, -sz, 0.0],
-            [sz, cz, 0.0],
-            [0.0, 0.0, 1.0],
-        ])
-        rotation = (
-            rotation_z
-            @ rotation_y
-            @ rotation_x
+        rotation = planning_euler_to_matrix(
+            box.rotation_x,
+            box.rotation_y,
+            box.rotation_z,
         )
 
         if self.planning_orientation == "Axial":
