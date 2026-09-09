@@ -1,5 +1,5 @@
 from pathlib import Path
-
+from common.geometry import cm_to_m
 import external.seq.adjustments_acq.config as cfg
 from external.seq.adjustments_acq.scripts import run_pulseq
 
@@ -21,7 +21,7 @@ class B0MapAdjustment(
     param_TR: float = 100.0
     param_NSA: int = 1
 
-    param_FOV: float = 200.0
+    param_FOV: float = 20.0
     param_baseresolution: int = 32
     param_slices: int = 8
 
@@ -68,7 +68,7 @@ class B0MapAdjustment(
             "TE2": 15.0,
             "TR": 100.0,
             "NSA": 1,
-            "FOV": 200.0,
+            "FOV": 20.0,
             "baseresolution": 32,
             "slices": 8,
             "BW": 32000,
@@ -169,10 +169,14 @@ class B0MapAdjustment(
         )
 
         scan_task.processing.oversampling_read = 2
+        base_fov_m = cm_to_m(
+            self.param_FOV
+        )
+
         scan_task.other["b0_geometry"] = {
-            "fov_x_m": self.param_FOV / 1000.0,
-            "fov_y_m": self.param_FOV / 1000.0,
-            "fov_z_m": self.param_FOV / 2000.0,
+            "fov_x_m": base_fov_m,
+            "fov_y_m": base_fov_m,
+            "fov_z_m": base_fov_m / 2.0,
         }
 
         # Make sure reconstruction has access

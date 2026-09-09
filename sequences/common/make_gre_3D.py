@@ -56,15 +56,57 @@ def pypulseq_gre3D(
         else None
     )
 
-    base_fov_m = cm_to_m(
-        inputs["FOV"]
+    planned_fov_m = inputs.get(
+        "planned_fov_m"
     )
 
-    fovx = base_fov_m
-    fovy = base_fov_m
+    if planned_fov_m is not None:
+        planned_fov_m = np.asarray(
+            planned_fov_m,
+            dtype=float,
+        )
 
-    # Preserve current GRE Z-FOV behavior for now.
-    fovz = base_fov_m / 2.0
+        if planned_fov_m.shape != (3,):
+            log.error(
+                "planned_fov_m must contain "
+                "three FOV dimensions."
+            )
+            return False
+
+        if np.any(
+            planned_fov_m <= 0
+        ):
+            log.error(
+                "Planned FOV dimensions "
+                "must be positive."
+            )
+            return False
+
+        fovx = float(
+            planned_fov_m[0]
+        )
+        fovy = float(
+            planned_fov_m[1]
+        )
+        fovz = float(
+            planned_fov_m[2]
+        )
+
+        log.info(
+            "Using planned GRE FOV [m]: "
+            f"{fovx}, {fovy}, {fovz}"
+        )
+
+    else:
+        base_fov_m = cm_to_m(
+            inputs["FOV"]
+        )
+
+        fovx = base_fov_m
+        fovy = base_fov_m
+
+        # Preserve legacy GRE Z behavior.
+        fovz = base_fov_m / 2.0
 
     Nx = inputs["baseresolution"]
     Ny = inputs["baseresolution"]

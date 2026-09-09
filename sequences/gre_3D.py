@@ -31,7 +31,7 @@ class SequenceGRE_3D(PulseqSequence, registry_key=Path(__file__).stem):
     param_TR: int = 250
     param_NSA: int = 1
     param_orientation: str = "Axial"
-    param_FOV: int = 200
+    param_FOV: int = 15
     param_baseresolution: int = 64
     param_slices: int = 8
     param_BW: int = 32000
@@ -262,7 +262,7 @@ class SequenceGRE_3D(PulseqSequence, registry_key=Path(__file__).stem):
         scan_task.processing.oversampling_read = 2
         self.seq_file_path = self.get_working_folder() + "/seq/acq0.seq"
 
-        if not self.generate_pulseq():
+        if not self.generate_pulseq(planned_geometry=planned_geometry):
             log.error("Unable to calculate sequence " + self.get_name())
             return False
 
@@ -319,22 +319,41 @@ class SequenceGRE_3D(PulseqSequence, registry_key=Path(__file__).stem):
         log.info("Done running sequence " + self.get_name())
         return True
 
-    def generate_pulseq(self) -> bool:
+    def generate_pulseq(
+        self,
+        planned_geometry=None,
+    ) -> bool:
+
+        inputs = {
+            "TE": self.param_TE,
+            "TR": self.param_TR,
+            "NSA": self.param_NSA,
+            "orientation": self.param_orientation,
+            "FOV": self.param_FOV,
+            "baseresolution": (
+                self.param_baseresolution
+            ),
+            "slices": self.param_slices,
+            "BW": self.param_BW,
+            "ordering": self.param_ordering,
+            "FA": self.param_FA,
+            "dummy_shots": (
+                self.param_dummy_shots
+            ),
+        }
+
+        if planned_geometry is not None:
+            inputs["planned_fov_m"] = (
+                planned_geometry
+                .fov_local_m
+                .tolist()
+            )
+
         return make_gre_3D.pypulseq_gre3D(
-            inputs={
-                "TE": self.param_TE,
-                "TR": self.param_TR,
-                "NSA": self.param_NSA,
-                "orientation": self.param_orientation,
-                "FOV": self.param_FOV,
-                "baseresolution": self.param_baseresolution,
-                "slices": self.param_slices,
-                "BW": self.param_BW,
-                "ordering": self.param_ordering,
-                "FA": self.param_FA,
-                "dummy_shots": self.param_dummy_shots,
-            },
+            inputs=inputs,
             check_timing=True,
             output_file=self.seq_file_path,
-            working_folder=self.get_working_folder(),
+            working_folder=(
+                self.get_working_folder()
+            ),
         )
