@@ -59,6 +59,11 @@ def pypulseq_gre3D(
     planned_fov_m = inputs.get(
         "planned_fov_m"
     )
+    planned_rotation_matrix = (
+        inputs.get(
+            "planned_rotation_matrix"
+        )
+    )
 
     if planned_fov_m is not None:
         planned_fov_m = np.asarray(
@@ -107,6 +112,50 @@ def pypulseq_gre3D(
 
         # Preserve legacy GRE Z behavior.
         fovz = base_fov_m / 2.0
+        
+    if planned_rotation_matrix is not None:
+        planned_rotation_matrix = (
+            np.asarray(
+                planned_rotation_matrix,
+                dtype=float,
+            )
+        )
+
+        if (
+            planned_rotation_matrix.shape
+            != (3, 3)
+        ):
+            log.error(
+                "planned_rotation_matrix "
+                "must be 3x3."
+            )
+            return False
+
+        if not np.allclose(
+            planned_rotation_matrix.T
+            @ planned_rotation_matrix,
+            np.eye(3),
+            atol=1e-6,
+        ):
+            log.error(
+                "planned_rotation_matrix "
+                "is not orthogonal."
+            )
+            return False
+
+        if not np.isclose(
+            np.linalg.det(
+                planned_rotation_matrix
+            ),
+            1.0,
+            atol=1e-6,
+        ):
+            log.error(
+                "planned_rotation_matrix "
+                "must have determinant +1."
+            )
+            return False
+
 
     Nx = inputs["baseresolution"]
     Ny = inputs["baseresolution"]
@@ -136,11 +185,18 @@ def pypulseq_gre3D(
     adc_dwell = 1 / BW
     adc_duration = Nx * adc_dwell
 
-    ch0, ch1, ch2 = (
-        orientation_channels(
-            orientation
+    if planned_fov_m is not None:
+        # Planned geometry is already expressed in
+        # absolute scanner XYZ coordinates.
+        ch0 = "x"
+        ch1 = "y"
+        ch2 = "z"
+    else:
+        ch0, ch1, ch2 = (
+            orientation_channels(
+                orientation
+            )
         )
-    )
 
     seq = pp.Sequence()
     n_shots = int(Ny * Nz)

@@ -362,6 +362,15 @@ class SequenceGRE_3D(PulseqSequence, registry_key=Path(__file__).stem):
                 .tolist()
             )
 
+            inputs[
+                "planned_rotation_matrix"
+            ] = (
+                planned_geometry
+                .rotation_local_to_scanner
+                .tolist()
+            )
+
+
         return make_gre_3D.pypulseq_gre3D(
             inputs=inputs,
             check_timing=True,
