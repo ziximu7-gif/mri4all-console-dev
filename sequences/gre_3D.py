@@ -245,6 +245,19 @@ class SequenceGRE_3D(PulseqSequence, registry_key=Path(__file__).stem):
             ] = (
                 planned_geometry.as_dict()
             )
+            fov_m = (
+                planned_geometry.fov_local_m
+            )
+
+            scan_task.other[
+                "geometry_application"
+            ] = {
+                "delta_k_1_per_m": [
+                    float(1.0 / fov_m[0]),
+                    float(1.0 / fov_m[1]),
+                    float(1.0 / fov_m[2]),
+                ],
+            }
 
             log.info(
                 "Resolved planned FOV geometry: "
