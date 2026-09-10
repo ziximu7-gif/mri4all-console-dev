@@ -206,7 +206,10 @@ class SequenceGRE_3D(PulseqSequence, registry_key=Path(__file__).stem):
                     self.param_orientation
                 ),
                 "gradient_transform": True,
-                "translation": False,
+                "translation": True,
+                "translation_method": (
+                    "reconstruction_kspace_phase_ramp"
+                ),
                 "logical_delta_k_1_per_m": [
                     float(1.0 / fov_m[0]),
                     float(1.0 / fov_m[1]),

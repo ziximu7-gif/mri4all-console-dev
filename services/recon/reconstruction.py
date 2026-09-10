@@ -90,6 +90,30 @@ def run_reconstruction_basic3d(folder: str, task: ScanTask) -> bool:
     )
     dims = task.processing.dim_size.split(",")
     # dim = slices:pe:read
+    resolved_encoding = (
+        task.other.get(
+            "resolved_encoding"
+        )
+    )
+
+    center_logical_m = None
+    fov_logical_m = None
+
+    if isinstance(
+        resolved_encoding,
+        dict,
+    ):
+        center_logical_m = (
+            resolved_encoding.get(
+                "center_logical_m"
+            )
+        )
+
+        fov_logical_m = (
+            resolved_encoding.get(
+                "fov_logical_m"
+            )
+        )
 
     images, kspaces = reconstruct_cartesian_3d_complex(
         raw=kData,
@@ -97,7 +121,15 @@ def run_reconstruction_basic3d(folder: str, task: ScanTask) -> bool:
         adc_phases=adc_phases,
         dims=dims,
         echo_count=1,
-        oversampling_read=task.processing.oversampling_read,
+        oversampling_read=(
+            task.processing.oversampling_read
+        ),
+        center_logical_m=(
+            center_logical_m
+        ),
+        fov_logical_m=(
+            fov_logical_m
+        ),
     )
 
     fft = images[0]

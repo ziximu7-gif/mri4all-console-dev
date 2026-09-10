@@ -1,5 +1,7 @@
 import numpy as np
-
+from recon.recon_utils.cartesian_translation import (
+    apply_cartesian_center_translation,
+)
 
 def reconstruct_cartesian_3d_complex(
     raw,
@@ -8,6 +10,8 @@ def reconstruct_cartesian_3d_complex(
     dims,
     echo_count=1,
     oversampling_read=2,
+    center_logical_m=None,
+    fov_logical_m=None,
 ):
     """
     Reconstruct one or more complex 3D GRE echoes.
@@ -50,6 +54,16 @@ def reconstruct_cartesian_3d_complex(
     raw = np.asarray(raw)
     order = np.asarray(order)
     adc_phases = np.asarray(adc_phases)
+    if (
+        (center_logical_m is None)
+        !=
+        (fov_logical_m is None)
+    ):
+        raise ValueError(
+            "center_logical_m and "
+            "fov_logical_m must be "
+            "provided together"
+        )
 
     expected_samples = (
         num_lines
@@ -158,6 +172,26 @@ def reconstruct_cartesian_3d_complex(
                 ]
                 * np.exp(
                     1j * adc_phase
+                )
+            )
+        if center_logical_m is not None:
+            kspace = (
+                apply_cartesian_center_translation(
+                    kspace=kspace,
+                    center_logical_m=(
+                        center_logical_m
+                    ),
+                    fov_logical_m=(
+                        fov_logical_m
+                    ),
+                    oversampling_read=(
+                        oversampling_read
+                    ),
+                    center_indices=(
+                        num_readout // 2,
+                        center_phase,
+                        center_slice,
+                    ),
                 )
             )
         kspaces.append(kspace)
