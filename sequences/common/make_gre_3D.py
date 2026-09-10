@@ -11,220 +11,12 @@ from common.geometry import (
     cm_to_m,
     orientation_channels,
 )
-from pypulseq.add_gradients import (
-    add_gradients,
+from sequences.common.gradient_transform import (
+    add_gradient_block,
 )
-
-from copy import copy
 
 log = logger.get_logger()
-_GRADIENT_AXES = (
-    "x",
-    "y",
-    "z",
-)
 
-_GRADIENT_AXIS_INDEX = {
-    "x": 0,
-    "y": 1,
-    "z": 2,
-}
-
-def _scale_gradient_event(
-    gradient,
-    scale,
-):
-    """
-    Scale a gradient event without relying on
-    newer PyPulseq scale_grad().
-    """
-
-    scaled = copy(gradient)
-
-    if gradient.type == "trap":
-        scaled.amplitude = (
-            gradient.amplitude
-            * scale
-        )
-
-        scaled.area = (
-            gradient.area
-            * scale
-        )
-
-        scaled.flat_area = (
-            gradient.flat_area
-            * scale
-        )
-
-        scaled.first = (
-            gradient.first
-            * scale
-        )
-
-        scaled.last = (
-            gradient.last
-            * scale
-        )
-
-    elif gradient.type == "grad":
-        scaled.waveform = (
-            np.asarray(
-                gradient.waveform,
-                dtype=float,
-            )
-            * scale
-        )
-
-        scaled.first = (
-            gradient.first
-            * scale
-        )
-
-        scaled.last = (
-            gradient.last
-            * scale
-        )
-
-    else:
-        raise ValueError(
-            "Unsupported gradient type: "
-            + str(gradient.type)
-        )
-
-    return scaled
-
-def _transform_gradient_events(
-    gradients,
-    logical_to_scanner,
-    system,
-):
-    """
-    Transform logical X/Y/Z gradient events
-    into physical scanner X/Y/Z gradients.
-
-    G_scanner = M @ G_logical
-    """
-
-    contributions = {
-        "x": [],
-        "y": [],
-        "z": [],
-    }
-
-    for gradient in gradients:
-        if gradient is None:
-            continue
-
-        if gradient.type not in (
-            "trap",
-            "grad",
-        ):
-            raise ValueError(
-                "Only gradient events can "
-                "be transformed."
-            )
-
-        logical_axis_index = (
-            _GRADIENT_AXIS_INDEX[
-                gradient.channel
-            ]
-        )
-
-        for (
-            scanner_axis_index,
-            scanner_axis,
-        ) in enumerate(
-            _GRADIENT_AXES
-        ):
-            coefficient = float(
-                logical_to_scanner[
-                    scanner_axis_index,
-                    logical_axis_index,
-                ]
-            )
-
-            if abs(coefficient) < 1e-12:
-                continue
-
-            transformed = (
-                _scale_gradient_event(
-                    gradient=gradient,
-                    scale=coefficient,
-                )
-            )
-
-            transformed.channel = (
-                scanner_axis
-            )
-
-            contributions[
-                scanner_axis
-            ].append(
-                transformed
-            )
-
-    scanner_gradients = []
-
-    for scanner_axis in (
-        _GRADIENT_AXES
-    ):
-        axis_gradients = (
-            contributions[
-                scanner_axis
-            ]
-        )
-
-        if not axis_gradients:
-            continue
-
-        if len(axis_gradients) == 1:
-            scanner_gradients.append(
-                axis_gradients[0]
-            )
-        else:
-            scanner_gradients.append(
-                add_gradients(
-                    grads=axis_gradients,
-                    system=system,
-                )
-            )
-
-    return scanner_gradients
-def _add_gradient_block(
-    seq,
-    gradients,
-    logical_to_scanner,
-    system,
-    extra_events=None,
-):
-    if logical_to_scanner is None:
-        output_gradients = list(
-            gradients
-        )
-    else:
-        output_gradients = (
-            _transform_gradient_events(
-                gradients=gradients,
-                logical_to_scanner=(
-                    logical_to_scanner
-                ),
-                system=system,
-            )
-        )
-
-    events = list(
-        output_gradients
-    )
-
-    if extra_events is not None:
-        events.extend(
-            extra_events
-        )
-
-    seq.add_block(
-        *events
-    )
 def pypulseq_gre3D(
     inputs,
     check_timing,
@@ -653,7 +445,7 @@ def pypulseq_gre3D(
                 system=system,
             )
 
-            _add_gradient_block(
+            add_gradient_block(
                 seq=seq,
                 gradients=[
                     gx_pre,
@@ -671,7 +463,7 @@ def pypulseq_gre3D(
             )
 
             if is_dummyshot:
-                _add_gradient_block(
+                add_gradient_block(
                     seq=seq,
                     gradients=[
                         gx,
@@ -682,7 +474,7 @@ def pypulseq_gre3D(
                     system=system,
                 )
             else:
-                _add_gradient_block(
+                add_gradient_block(
                     seq=seq,
                     gradients=[
                         gx,
@@ -701,7 +493,7 @@ def pypulseq_gre3D(
                 )
             if TE2 is not None:
                 # Rewind readout k-space after echo 1.
-                _add_gradient_block(
+                add_gradient_block(
                     seq=seq,
                     gradients=[
                         gx_rewind,
@@ -720,7 +512,7 @@ def pypulseq_gre3D(
                 # Acquire echo 2 with the same
                 # forward readout gradient.
                 if is_dummyshot:
-                    _add_gradient_block(
+                    add_gradient_block(
                         seq=seq,
                         gradients=[
                             gx,
@@ -732,7 +524,7 @@ def pypulseq_gre3D(
                     )
 
                 else:
-                    _add_gradient_block(
+                    add_gradient_block(
                         seq=seq,
                         gradients=[
                             gx,
@@ -758,7 +550,7 @@ def pypulseq_gre3D(
                 -gz_pre.amplitude
             )
 
-            _add_gradient_block(
+            add_gradient_block(
                 seq=seq,
                 gradients=[
                     gx_spoil,

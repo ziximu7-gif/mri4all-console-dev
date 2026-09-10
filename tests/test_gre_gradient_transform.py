@@ -1,8 +1,8 @@
 import numpy as np
 import pypulseq as pp
 
-from sequences.common.make_gre_3D import (
-    _transform_gradient_events,
+from sequences.common.gradient_transform import (
+    transform_gradient_events,
 )
 
 
@@ -28,7 +28,7 @@ def test_gradient_transform_identity():
     )
 
     transformed = (
-        _transform_gradient_events(
+        transform_gradient_events(
             gradients=[gx],
             logical_to_scanner=np.eye(3),
             system=system,
@@ -80,7 +80,7 @@ def test_gradient_transform_z_rotation():
     )
 
     transformed = (
-        _transform_gradient_events(
+        transform_gradient_events(
             gradients=[gx],
             logical_to_scanner=rotation,
             system=system,
@@ -155,7 +155,7 @@ def test_gradient_transform_combines_axes():
     )
 
     transformed = (
-        _transform_gradient_events(
+        transform_gradient_events(
             gradients=[
                 gx,
                 gy,
