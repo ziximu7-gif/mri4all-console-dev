@@ -210,6 +210,11 @@ class SequenceGRE_3D(PulseqSequence, registry_key=Path(__file__).stem):
                 "translation_method": (
                     "reconstruction_kspace_phase_ramp"
                 ),
+                "slab_selection": True,
+                "slab_positioning": True,
+                "slab_positioning_method": (
+                    "rf_waveform_frequency_modulation"
+                ),
                 "logical_delta_k_1_per_m": [
                     float(1.0 / fov_m[0]),
                     float(1.0 / fov_m[1]),

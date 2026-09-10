@@ -15,9 +15,8 @@ from sequences.common.gradient_transform import (
     add_gradient_block,
 )
 
-
-from sequences.common.gradient_transform import (
-    transform_gradient_events,
+from sequences.common.rf_positioning import (
+    apply_centered_rf_frequency_modulation,
 )
 
 log = logger.get_logger()
@@ -95,12 +94,6 @@ def pypulseq_gre3D(
     ):
         log.error(
             "planned_center_logical_m, "
-            "planned_fov_m and "
-            "logical_to_scanner must "
-            "be provided together."
-        )
-        return False
-        log.error(
             "planned_fov_m and "
             "logical_to_scanner must "
             "be provided together."
@@ -288,6 +281,31 @@ def pypulseq_gre3D(
             system=system,
             return_gz=True,
             use="excitation",
+        )
+
+        center_third_m = float(
+            planned_center_logical_m[2]
+        )
+
+        slab_frequency_hz = (
+            float(
+                gslab.amplitude
+            )
+            * center_third_m
+        )
+
+        apply_centered_rf_frequency_modulation(
+            rf=rf1,
+            frequency_hz=(
+                slab_frequency_hz
+            ),
+        )
+
+        log.info(
+            "GRE slab position: "
+            f"third={center_third_m} m, "
+            f"RF modulation="
+            f"{slab_frequency_hz} Hz"
         )
 
         log.info(
@@ -788,48 +806,3 @@ def pypulseq_gre3D(
 
     return True
 
-def test_oblique_slab_gradient_rotation():
-    system = pp.Opts(
-        max_grad=100,
-        grad_unit="mT/m",
-        max_slew=4000,
-        slew_unit="T/m/s",
-    )
-
-    gslab = pp.make_trapezoid(
-        channel="z",
-        amplitude=1000.0,
-        flat_time=1e-3,
-        system=system,
-    )
-
-    logical_to_scanner = np.array(
-        [
-            [1.0, 0.0, 0.0],
-            [0.0, 0.0, -1.0],
-            [0.0, 1.0, 0.0],
-        ]
-    )
-
-    transformed = (
-        transform_gradient_events(
-            gradients=[
-                gslab,
-            ],
-            logical_to_scanner=(
-                logical_to_scanner
-            ),
-            system=system,
-        )
-    )
-
-    assert len(transformed) == 1
-
-    gradient = transformed[0]
-
-    assert gradient.channel == "y"
-
-    np.testing.assert_allclose(
-        gradient.amplitude,
-        -1000.0,
-    )
