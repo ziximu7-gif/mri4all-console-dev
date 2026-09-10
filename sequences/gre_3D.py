@@ -232,16 +232,6 @@ class SequenceGRE_3D(PulseqSequence, registry_key=Path(__file__).stem):
                 )
             )
 
-            log.info(
-                "Resolved planned FOV geometry: "
-                + str(
-                    scan_task.other[
-                        "resolved_geometry"
-                    ]
-                )
-            )
-
-
         scan_task.processing.recon_mode = "basic3d"
         scan_task.processing.dim = 3
         scan_task.processing.dim_size = f"{self.param_slices},{self.param_baseresolution},{2*self.param_baseresolution}"
@@ -329,6 +319,12 @@ class SequenceGRE_3D(PulseqSequence, registry_key=Path(__file__).stem):
         }
 
         if planned_encoding is not None:
+            inputs["planned_center_logical_m"] = (
+                planned_encoding
+                .center_logical_m
+                .tolist()
+            )
+
             inputs["planned_fov_m"] = (
                 planned_encoding
                 .fov_logical_m

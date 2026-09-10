@@ -80,36 +80,38 @@ ORIENTATION_PLANE_AXES = {
 
 
 @dataclass
-class ScanGeometry:
+class EncodingGeometry:
     """
-    Physical scan geometry.
+    Encoding geometry in logical
+    read/phase/third coordinates.
 
-    center_scanner_m:
-        FOV center in scanner X/Y/Z coordinates [m].
+    center_logical_m:
+        FOV center expressed along logical
+        read/phase/third axes [m].
 
-    fov_local_m:
-        FOV dimensions along the box-local
-        X/Y/Z axes [m].
+    fov_logical_m:
+        FOV along logical read/phase/third
+        directions [m].
 
-    rotation_local_to_scanner:
-        3x3 rotation matrix mapping local FOV axes into
-        scanner physical X/Y/Z axes.
+    logical_to_scanner:
+        Maps logical read/phase/third vectors
+        into physical scanner X/Y/Z.
     """
 
-    center_scanner_m: np.ndarray
-    fov_local_m: np.ndarray
-    rotation_local_to_scanner: np.ndarray
+    center_logical_m: np.ndarray
+    fov_logical_m: np.ndarray
+    logical_to_scanner: np.ndarray
 
     def as_dict(self):
         return {
-            "center_scanner_m": (
-                self.center_scanner_m.tolist()
+            "center_logical_m": (
+                self.center_logical_m.tolist()
             ),
-            "fov_local_m": (
-                self.fov_local_m.tolist()
+            "fov_logical_m": (
+                self.fov_logical_m.tolist()
             ),
-            "rotation_local_to_scanner": (
-                self.rotation_local_to_scanner.tolist()
+            "logical_to_scanner": (
+                self.logical_to_scanner.tolist()
             ),
         }
 
@@ -374,6 +376,8 @@ def resolve_encoding_geometry(
         @ box_fov_m
     )
 
+    
+
     # Logical encoding axes
     # -> box-local axes
     # -> scanner physical axes
@@ -383,7 +387,34 @@ def resolve_encoding_geometry(
         @ encoding_matrix
     )
 
+    center_scanner_m = np.asarray(
+        scan_geometry.center_scanner_m,
+        dtype=float,
+    )
+
+    if center_scanner_m.shape != (3,):
+        raise ValueError(
+            "Scan center must contain X/Y/Z"
+        )
+
+    # Scanner coordinates -> logical
+    # read/phase/third coordinates.
+    #
+    # r_scanner = M @ r_logical
+    # therefore:
+    # r_logical = M.T @ r_scanner
+    #
+    # logical_to_scanner is orthogonal,
+    # so transpose is its inverse.
+    center_logical_m = (
+        logical_to_scanner.T
+        @ center_scanner_m
+    )
+
     return EncodingGeometry(
+        center_logical_m=(
+            center_logical_m
+        ),
         fov_logical_m=fov_logical_m,
         logical_to_scanner=(
             logical_to_scanner

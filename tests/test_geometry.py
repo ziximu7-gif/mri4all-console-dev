@@ -215,7 +215,13 @@ def test_orientation_encoding_matrix():
 def test_coronal_encoding_geometry():
 
     scan_geometry = ScanGeometry(
-        center_scanner_m=np.zeros(3),
+        center_scanner_m=np.array(
+            [
+                0.01,
+                0.02,
+                0.03,
+            ]
+        ),
         fov_local_m=np.array(
             [
                 0.12,
@@ -242,4 +248,55 @@ def test_coronal_encoding_geometry():
             0.08,
             0.10,
         ],
+    )
+    np.testing.assert_allclose(
+        encoding.center_logical_m,
+        [
+            0.01,
+            0.03,
+            0.02,
+        ],
+    )
+def test_rotated_encoding_center():
+    rotation = (
+        planning_euler_to_matrix(
+            0.0,
+            0.0,
+            90.0,
+        )
+    )
+
+    scan_geometry = ScanGeometry(
+        center_scanner_m=np.array(
+            [
+                0.01,
+                0.0,
+                0.0,
+            ]
+        ),
+        fov_local_m=np.array(
+            [
+                0.12,
+                0.10,
+                0.08,
+            ]
+        ),
+        rotation_local_to_scanner=rotation,
+    )
+
+    encoding = (
+        resolve_encoding_geometry(
+            scan_geometry=scan_geometry,
+            orientation="Axial",
+        )
+    )
+
+    np.testing.assert_allclose(
+        encoding.center_logical_m,
+        [
+            0.0,
+            -0.01,
+            0.0,
+        ],
+        atol=1e-12,
     )
