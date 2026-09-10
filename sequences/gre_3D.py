@@ -16,6 +16,12 @@ import common.helper as helper
 from sequences.common.planning import (
     resolve_task_planning,
 )
+import common.config as config
+
+from sequences.common import (
+    make_gre_3D,
+    view_sequence,
+)
 
 log = logger.get_logger()
 
@@ -249,6 +255,101 @@ class SequenceGRE_3D(PulseqSequence, registry_key=Path(__file__).stem):
         if not self.generate_pulseq(planned_encoding=planned_encoding):
             log.error("Unable to calculate sequence " + self.get_name())
             return False
+        # ---------------------------------------------------------
+        # GRE Pulseq visualization
+        # ---------------------------------------------------------
+
+        tr_s = (
+            float(self.param_TR)
+            / 1000.0
+        )
+
+        # Dummy shots have no ADC.
+        # Display the first actual acquisition TR.
+        visualization_start = (
+            self.param_dummy_shots
+            * tr_s
+        )
+
+        visualization_end = (
+            visualization_start
+            + tr_s
+        )
+
+        visualization_result = (
+            view_sequence.visualize_sequence(
+                sequence_source=(
+                    self.seq_file_path
+                ),
+                output_folder=(
+                    self.get_working_folder()
+                    + "/other"
+                ),
+                prefix="gre3d",
+                time_range=(
+                    visualization_start,
+                    visualization_end,
+                ),
+                time_disp="ms",
+                plot_type="Gradient",
+            )
+        )
+
+        rf_result = ResultItem()
+
+        rf_result.name = (
+            "GRE Sequence - RF / ADC"
+        )
+
+        rf_result.description = (
+            "Planned 3D GRE Pulseq "
+            "RF and ADC visualization"
+        )
+
+        rf_result.type = "plot"
+        rf_result.primary = False
+        rf_result.autoload_viewer = 4
+
+        rf_result.file_path = (
+            "other/"
+            + Path(
+                visualization_result[
+                    "rf_adc"
+                ]
+            ).name
+        )
+
+        scan_task.results.append(
+            rf_result
+        )
+
+        gradient_result = ResultItem()
+
+        gradient_result.name = (
+            "GRE Sequence - Gradients"
+        )
+
+        gradient_result.description = (
+            "Physical scanner Gx/Gy/Gz "
+            "after FOV rotation"
+        )
+
+        gradient_result.type = "plot"
+        gradient_result.primary = False
+        gradient_result.autoload_viewer = 0
+
+        gradient_result.file_path = (
+            "other/"
+            + Path(
+                visualization_result[
+                    "gradients"
+                ]
+            ).name
+        )
+
+        scan_task.results.append(
+            gradient_result
+        )
 
         log.info("Done calculating sequence " + self.get_name())
         return True
@@ -263,7 +364,6 @@ class SequenceGRE_3D(PulseqSequence, registry_key=Path(__file__).stem):
             / 1000
         )
 
-        plot_instructions = True
 
         rxd, rx_t = run_pulseq(
             seq_file=self.seq_file_path,
@@ -282,23 +382,13 @@ class SequenceGRE_3D(PulseqSequence, registry_key=Path(__file__).stem):
             case_path=self.get_working_folder(),
             raw_filename="raw",
             expected_duration_sec=expected_duration_sec,
-            plot_instructions=plot_instructions,
+            plot_instructions=False,
+            hardware_simulation=(
+                config.get_config()
+                .is_hardware_simulation()
+            ),
         )
         scan_task.adjustment.rf.larmor_frequency = cfg.LARMOR_FREQ
-
-        if plot_instructions:
-            file = open(self.get_working_folder() + "/other/seq.plot", "wb")
-            fig = plt.gcf()
-            pickle.dump(fig, file)
-            file.close()
-
-            result = ResultItem()
-            result.name = "seq_plot"
-            result.description = "Timing diagram of sequence"
-            result.type = "plot"
-            result.file_path = "other/seq.plot"
-            result.autoload_viewer = 4
-            scan_task.results.append(result)
 
         log.info("Done running sequence " + self.get_name())
         return True
