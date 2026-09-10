@@ -15,6 +15,11 @@ from sequences.common.gradient_transform import (
     add_gradient_block,
 )
 
+
+from sequences.common.gradient_transform import (
+    transform_gradient_events,
+)
+
 log = logger.get_logger()
 
 def pypulseq_gre3D(
@@ -58,20 +63,43 @@ def pypulseq_gre3D(
         else None
     )
 
+    planned_center_logical_m = (
+        inputs.get(
+            "planned_center_logical_m"
+        )
+    )
+
     planned_fov_m = inputs.get(
         "planned_fov_m"
     )
+
     logical_to_scanner = (
         inputs.get(
             "logical_to_scanner"
         )
     )
 
-    if (
-        (planned_fov_m is None)
-        !=
-        (logical_to_scanner is None)
+    planning_values = (
+        planned_center_logical_m,
+        planned_fov_m,
+        logical_to_scanner,
+    )
+
+    planning_present = [
+        value is not None
+        for value in planning_values
+    ]
+
+    if any(planning_present) and not all(
+        planning_present
     ):
+        log.error(
+            "planned_center_logical_m, "
+            "planned_fov_m and "
+            "logical_to_scanner must "
+            "be provided together."
+        )
+        return False
         log.error(
             "planned_fov_m and "
             "logical_to_scanner must "
@@ -80,6 +108,29 @@ def pypulseq_gre3D(
         return False
 
     if planned_fov_m is not None:
+        planned_center_logical_m = np.asarray(
+            planned_center_logical_m,
+            dtype=float,
+        )
+
+        if planned_center_logical_m.shape != (3,):
+            log.error(
+                "planned_center_logical_m "
+                "must contain "
+                "read/phase/third."
+            )
+            return False
+
+        if not np.all(
+            np.isfinite(
+                planned_center_logical_m
+            )
+        ):
+            log.error(
+                "Planned FOV center "
+                "must be finite."
+            )
+            return False
         planned_fov_m = np.asarray(
             planned_fov_m,
             dtype=float,
@@ -214,13 +265,50 @@ def pypulseq_gre3D(
         adc_dead_time=20e-6,
     )
 
-    rf1 = pp.make_block_pulse(
-        flip_angle=alpha1 * math.pi / 180,
-        duration=alpha1_duration,
-        delay=0e-6,
-        system=system,
-        use="excitation",
-    )
+    gslab = None
+    gslab_rephase = None
+
+    if planned_fov_m is not None:
+        slab_rf_duration = 2e-3
+
+        (
+            rf1,
+            gslab,
+            gslab_rephase,
+        ) = pp.make_sinc_pulse(
+            flip_angle=(
+                alpha1
+                * math.pi
+                / 180
+            ),
+            duration=slab_rf_duration,
+            slice_thickness=fovz,
+            apodization=0.5,
+            time_bw_product=4,
+            system=system,
+            return_gz=True,
+            use="excitation",
+        )
+
+        log.info(
+            "Using slab-selective GRE "
+            f"excitation, thickness={fovz} m"
+        )
+
+    else:
+        # Keep legacy GRE / B0-map behavior
+        # unchanged.
+        rf1 = pp.make_block_pulse(
+            flip_angle=(
+                alpha1
+                * math.pi
+                / 180
+            ),
+            duration=alpha1_duration,
+            delay=0e-6,
+            system=system,
+            use="excitation",
+        )
 
     delta_kx = 1 / fovx
     delta_ky = 1 / fovy
@@ -299,6 +387,53 @@ def pypulseq_gre3D(
         system=system,
     )
 
+    rf_center_time = (
+        rf1.delay
+        + pp.calc_rf_center(
+            rf1
+        )[0]
+    )
+
+    if gslab is None:
+        excitation_block_duration = (
+            pp.calc_duration(
+                rf1
+            )
+        )
+
+        slab_rephase_duration = 0.0
+
+    else:
+        excitation_block_duration = max(
+            pp.calc_duration(
+                rf1
+            ),
+            pp.calc_duration(
+                gslab
+            ),
+        )
+
+        slab_rephase_duration = (
+            pp.calc_duration(
+                gslab_rephase
+            )
+        )
+
+    rf_tail_duration = (
+        excitation_block_duration
+        - rf_center_time
+    )
+
+    minimum_te1 = (
+        rf_tail_duration
+        + slab_rephase_duration
+        + pre_duration
+        + 0.5
+        * pp.calc_duration(
+            gx
+        )
+    )
+
     if TE1 == 0:
         tau1 = (
             10
@@ -306,19 +441,16 @@ def pypulseq_gre3D(
         )
 
         TE1 = (
-            tau1
-            + 0.5 * pp.calc_duration(rf1)
-            + pre_duration
-            + 0.5 * pp.calc_duration(gx)
+            minimum_te1
+            + tau1
         )
+
     else:
         tau1 = (
             math.ceil(
                 (
                     TE1
-                    - 0.5 * pp.calc_duration(rf1)
-                    - pre_duration
-                    - 0.5 * pp.calc_duration(gx)
+                    - minimum_te1
                 )
                 / seq.grad_raster_time
             )
@@ -363,17 +495,35 @@ def pypulseq_gre3D(
         math.ceil(
             (
                 TR
-                - 0.5 * pp.calc_duration(rf1)
+                - rf_center_time
                 - last_TE
-                - 0.5 * pp.calc_duration(gx)
-                - pp.calc_duration(gx_spoil)
+                - 0.5
+                * pp.calc_duration(
+                    gx
+                )
+                - pp.calc_duration(
+                    gx_spoil
+                )
             )
             / seq.grad_raster_time
         )
         * seq.grad_raster_time
     )
+    if delay_TR < 0:
+        log.error(
+            "TR is too short for "
+            "the selected GRE timing."
+        )
+        return False
 
-    assert np.all(tau1 >= 0)
+    if tau1 < 0:
+        log.error(
+            "TE1 is too short for "
+            "slab-selective GRE. "
+            f"Minimum TE is approximately "
+            f"{minimum_te1 * 1000:.3f} ms."
+        )
+        return False
 
     if tau2 is not None:
         assert np.all(tau2 >= 0)
@@ -419,7 +569,36 @@ def pypulseq_gre3D(
                 * math.pi
             )
 
-            seq.add_block(rf1)
+            if gslab is None:
+                seq.add_block(
+                    rf1
+                )
+
+            else:
+                add_gradient_block(
+                    seq=seq,
+                    gradients=[
+                        gslab,
+                    ],
+                    logical_to_scanner=(
+                        logical_to_scanner
+                    ),
+                    system=system,
+                    extra_events=[
+                        rf1,
+                    ],
+                )
+
+                add_gradient_block(
+                    seq=seq,
+                    gradients=[
+                        gslab_rephase,
+                    ],
+                    logical_to_scanner=(
+                        logical_to_scanner
+                    ),
+                    system=system,
+                )
 
             if is_dummyshot:
                 pe_idx = 0
@@ -608,3 +787,49 @@ def pypulseq_gre3D(
         return False
 
     return True
+
+def test_oblique_slab_gradient_rotation():
+    system = pp.Opts(
+        max_grad=100,
+        grad_unit="mT/m",
+        max_slew=4000,
+        slew_unit="T/m/s",
+    )
+
+    gslab = pp.make_trapezoid(
+        channel="z",
+        amplitude=1000.0,
+        flat_time=1e-3,
+        system=system,
+    )
+
+    logical_to_scanner = np.array(
+        [
+            [1.0, 0.0, 0.0],
+            [0.0, 0.0, -1.0],
+            [0.0, 1.0, 0.0],
+        ]
+    )
+
+    transformed = (
+        transform_gradient_events(
+            gradients=[
+                gslab,
+            ],
+            logical_to_scanner=(
+                logical_to_scanner
+            ),
+            system=system,
+        )
+    )
+
+    assert len(transformed) == 1
+
+    gradient = transformed[0]
+
+    assert gradient.channel == "y"
+
+    np.testing.assert_allclose(
+        gradient.amplitude,
+        -1000.0,
+    )
