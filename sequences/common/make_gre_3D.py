@@ -14,9 +14,8 @@ from common.geometry import (
 from pypulseq.add_gradients import (
     add_gradients,
 )
-from pypulseq.scale_grad import (
-    scale_grad,
-)
+
+from copy import copy
 
 log = logger.get_logger()
 _GRADIENT_AXES = (
@@ -31,6 +30,69 @@ _GRADIENT_AXIS_INDEX = {
     "z": 2,
 }
 
+def _scale_gradient_event(
+    gradient,
+    scale,
+):
+    """
+    Scale a gradient event without relying on
+    newer PyPulseq scale_grad().
+    """
+
+    scaled = copy(gradient)
+
+    if gradient.type == "trap":
+        scaled.amplitude = (
+            gradient.amplitude
+            * scale
+        )
+
+        scaled.area = (
+            gradient.area
+            * scale
+        )
+
+        scaled.flat_area = (
+            gradient.flat_area
+            * scale
+        )
+
+        scaled.first = (
+            gradient.first
+            * scale
+        )
+
+        scaled.last = (
+            gradient.last
+            * scale
+        )
+
+    elif gradient.type == "grad":
+        scaled.waveform = (
+            np.asarray(
+                gradient.waveform,
+                dtype=float,
+            )
+            * scale
+        )
+
+        scaled.first = (
+            gradient.first
+            * scale
+        )
+
+        scaled.last = (
+            gradient.last
+            * scale
+        )
+
+    else:
+        raise ValueError(
+            "Unsupported gradient type: "
+            + str(gradient.type)
+        )
+
+    return scaled
 
 def _transform_gradient_events(
     gradients,
@@ -85,9 +147,11 @@ def _transform_gradient_events(
             if abs(coefficient) < 1e-12:
                 continue
 
-            transformed = scale_grad(
-                grad=gradient,
-                scale=coefficient,
+            transformed = (
+                _scale_gradient_event(
+                    gradient=gradient,
+                    scale=coefficient,
+                )
             )
 
             transformed.channel = (
@@ -114,12 +178,17 @@ def _transform_gradient_events(
         if not axis_gradients:
             continue
 
-        scanner_gradients.append(
-            add_gradients(
-                grads=axis_gradients,
-                system=system,
+        if len(axis_gradients) == 1:
+            scanner_gradients.append(
+                axis_gradients[0]
             )
-        )
+        else:
+            scanner_gradients.append(
+                add_gradients(
+                    grads=axis_gradients,
+                    system=system,
+                )
+            )
 
     return scanner_gradients
 def _add_gradient_block(
