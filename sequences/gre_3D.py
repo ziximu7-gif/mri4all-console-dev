@@ -22,7 +22,7 @@ from sequences.common import (
     make_gre_3D,
     view_sequence,
 )
-
+import common.config as config
 log = logger.get_logger()
 
 from common.ipc import Communicator
@@ -381,7 +381,9 @@ class SequenceGRE_3D(PulseqSequence, registry_key=Path(__file__).stem):
             gui_test=False,
             case_path=self.get_working_folder(),
             raw_filename="raw",
-            expected_duration_sec=expected_duration_sec,
+            expected_duration_sec=(
+                expected_duration_sec
+            ),
             plot_instructions=False,
             hardware_simulation=(
                 config.get_config()
