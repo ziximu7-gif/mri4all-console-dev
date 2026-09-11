@@ -24,6 +24,7 @@ def write_dicom(
     primary_result=True,
     autoload_viewer=1,
     result_index=0,
+    logical_axis_order=(0, 1, 2),
 ):
     """
     Write DICOMS to a specified holder using information from the scan task
@@ -57,6 +58,20 @@ def write_dicom(
             studyInstanceUID, seriesInstanceUID, instance_counter, task
         )
         dicom_dataset = set_image_information(dicom_dataset, pixel_data)
+        dicom_dataset = (
+            set_resolved_spatial_spacing(
+                dicom_dataset=(
+                    dicom_dataset
+                ),
+                task=task,
+                image_shape=(
+                    ndarray_dims
+                ),
+                logical_axis_order=(
+                    logical_axis_order
+                ),
+            )
+        )
         dicom_dataset = set_window_width_level(dicom_dataset, pixel_data)
         dicom_dataset.PixelData = pixel_data.tobytes()
         dicom_filename = (
@@ -87,6 +102,93 @@ def write_dicom(
     task.results.insert(result_index, result)
     return
 
+def set_resolved_spatial_spacing(
+    dicom_dataset,
+    task,
+    image_shape,
+    logical_axis_order,
+):
+    """
+    Apply voxel spacing for a planned
+    FOV-native reconstruction.
+
+    logical axes:
+        0 = read
+        1 = phase
+        2 = third
+    """
+
+    resolved_encoding = (
+        task.other.get(
+            "resolved_encoding"
+        )
+    )
+
+    if not isinstance(
+        resolved_encoding,
+        dict,
+    ):
+        return dicom_dataset
+
+    fov_logical_m = (
+        resolved_encoding.get(
+            "fov_logical_m"
+        )
+    )
+
+    if fov_logical_m is None:
+        return dicom_dataset
+
+    fov_logical_mm = (
+        np.asarray(
+            fov_logical_m,
+            dtype=float,
+        )
+        * 1000.0
+    )
+
+    if (
+        fov_logical_mm.shape
+        != (3,)
+    ):
+        return dicom_dataset
+
+    axis_order = np.asarray(
+        logical_axis_order,
+        dtype=int,
+    )
+
+    shape = np.asarray(
+        image_shape,
+        dtype=float,
+    )
+
+    spacing_mm = (
+        fov_logical_mm[
+            axis_order
+        ]
+        / shape
+    )
+
+    # numpy volume:
+    #
+    # axis 0 -> DICOM rows
+    # axis 1 -> DICOM columns
+    # axis 2 -> slice stack
+    dicom_dataset.PixelSpacing = [
+        float(spacing_mm[0]),
+        float(spacing_mm[1]),
+    ]
+
+    dicom_dataset.SliceThickness = (
+        float(spacing_mm[2])
+    )
+
+    dicom_dataset.SpacingBetweenSlices = (
+        float(spacing_mm[2])
+    )
+
+    return dicom_dataset
 
 def set_dicom_header(StudyInstanceUID, SeriesInstanceUID, instance_num, task):
     """

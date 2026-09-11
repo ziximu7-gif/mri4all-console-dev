@@ -142,28 +142,48 @@ _AXIS_UNIT_VECTORS = {
 
 def orientation_encoding_matrix(
     orientation: str,
+    readout_direction: str = "Horizontal",
 ) -> np.ndarray:
-    """
-    Map logical GRE axes:
 
-        read, phase, third
-
-    into box-local X/Y/Z axes.
-
-    This is an encoding-axis matrix, not
-    necessarily a proper 3D rotation matrix.
-    """
-
-    channels = orientation_channels(
-        orientation
+    channels = list(
+        orientation_channels(
+            orientation
+        )
     )
+
+    if (
+        readout_direction
+        == "Horizontal"
+    ):
+        pass
+
+    elif (
+        readout_direction
+        == "Vertical"
+    ):
+        channels[0], channels[1] = (
+            channels[1],
+            channels[0],
+        )
+
+    else:
+        raise ValueError(
+            "Unsupported readout "
+            "direction: "
+            + str(
+                readout_direction
+            )
+        )
 
     return np.column_stack(
         [
-            _AXIS_UNIT_VECTORS[channel]
+            _AXIS_UNIT_VECTORS[
+                channel
+            ]
             for channel in channels
         ]
     )
+
 
 
 def orientation_plane_axes(
@@ -442,11 +462,15 @@ class EncodingGeometry:
 def resolve_encoding_geometry(
     scan_geometry: ScanGeometry,
     orientation: str,
+    readout_direction: str = "Horizontal",
 ) -> EncodingGeometry:
 
     encoding_matrix = (
         orientation_encoding_matrix(
-            orientation
+            orientation,
+            readout_direction=(
+                readout_direction
+            ),
         )
     )
 

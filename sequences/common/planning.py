@@ -12,6 +12,7 @@ log = logger.get_logger()
 def resolve_task_planning(
     scan_task,
     orientation,
+    readout_direction="Horizontal",
 ):
     """
     Resolve Localizer planning data stored in
@@ -84,6 +85,9 @@ def resolve_task_planning(
         resolve_encoding_geometry(
             scan_geometry=scan_geometry,
             orientation=orientation,
+            readout_direction=(
+                readout_direction
+            ),
         )
     )
 

@@ -44,6 +44,7 @@ class SequenceGRE_3D(PulseqSequence, registry_key=Path(__file__).stem):
     param_trajectory: str = "Cartesian"
     param_ordering: str = "linear_up"
     param_dummy_shots: int = 20
+    param_readout_direction: str = ("Horizontal")
 
     @classmethod
     def get_readable_name(self) -> str:
@@ -102,6 +103,7 @@ class SequenceGRE_3D(PulseqSequence, registry_key=Path(__file__).stem):
             "trajectory": self.param_trajectory,
             "ordering": self.param_ordering,
             "FA": self.param_FA,
+            "readout_direction": (self.param_readout_direction),
         }
 
     @classmethod
@@ -120,6 +122,7 @@ class SequenceGRE_3D(PulseqSequence, registry_key=Path(__file__).stem):
             "trajectory": "Cartesian",
             "ordering": "linear_up",
             "FA": 20,
+            "readout_direction": ("Horizontal"),
         }
 
     def set_parameters(self, parameters, scan_task) -> bool:
@@ -136,6 +139,7 @@ class SequenceGRE_3D(PulseqSequence, registry_key=Path(__file__).stem):
             self.param_trajectory = parameters["trajectory"]
             self.param_ordering = parameters["ordering"]
             self.param_FA = parameters["FA"]
+            self.param_readout_direction = (parameters.get("readout_direction","Horizontal",))
         except:
             self.problem_list.append("Invalid parameters provided")
             return False
@@ -153,6 +157,7 @@ class SequenceGRE_3D(PulseqSequence, registry_key=Path(__file__).stem):
         widget.BW_SpinBox.setValue(self.param_BW)
         widget.Trajectory_ComboBox.setCurrentText(self.param_trajectory)
         widget.Ordering_ComboBox.setCurrentText(self.param_ordering)
+        widget.ReadoutDirection_ComboBox.setCurrentText(self.param_readout_direction)
         return True
 
     def read_parameters_from_ui(self, widget, scan_task) -> bool:
@@ -169,6 +174,7 @@ class SequenceGRE_3D(PulseqSequence, registry_key=Path(__file__).stem):
         self.param_ordering = widget.Ordering_ComboBox.currentText()
         self.param_FA = widget.FA_SpinBox.value()
         self.validate_parameters(scan_task)
+        self.param_readout_direction = (widget.ReadoutDirection_ComboBox.currentText())
         return self.is_valid()
 
     def validate_parameters(self, scan_task) -> bool:
@@ -187,8 +193,12 @@ class SequenceGRE_3D(PulseqSequence, registry_key=Path(__file__).stem):
             orientation=(
                 self.param_orientation
             ),
+            readout_direction=(
+                self.param_readout_direction
+            ),
         )
         if planned_geometry is not None:
+
             scan_task.other[
                 "resolved_geometry"
             ] = (
@@ -203,6 +213,13 @@ class SequenceGRE_3D(PulseqSequence, registry_key=Path(__file__).stem):
 
             fov_m = (
                 planned_encoding.fov_logical_m
+            )
+            scan_task.other[
+                "geometry_application"
+            ][
+                "readout_direction"
+            ] = (
+                self.param_readout_direction
             )
 
             scan_task.other[
@@ -246,6 +263,18 @@ class SequenceGRE_3D(PulseqSequence, registry_key=Path(__file__).stem):
                     ]
                 )
             )
+            if planned_encoding is not None:
+                matrix = (
+                    planned_encoding
+                    .logical_to_scanner
+                )
+
+                log.info(
+                    "GRE k-space axes in scanner XYZ: "
+                    f"read={matrix[:, 0].tolist()}, "
+                    f"phase1={matrix[:, 1].tolist()}, "
+                    f"phase2={matrix[:, 2].tolist()}"
+                )
 
         scan_task.processing.recon_mode = "basic3d"
         scan_task.processing.dim = 3

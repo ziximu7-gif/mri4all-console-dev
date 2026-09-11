@@ -149,7 +149,73 @@ def run_reconstruction_basic3d(folder: str, task: ScanTask) -> bool:
             f"min={np.min(np.abs(fft[:, :, i]))}, "
             f"max={np.max(np.abs(fft[:, :, i]))}"
         )
-    DICOM.write_dicom(fft, task, folder + "/" + mri4all_taskdata.DICOM, result_index=0)
+    # ---------------------------------------------------------
+    # FOV-native orthogonal reconstruction views
+    #
+    # fft axis order:
+    #
+    #   axis 0 = read
+    #   axis 1 = phase
+    #   axis 2 = third
+    # ---------------------------------------------------------
+
+    native_views = [
+        {
+            "name": "FOV Native - Read / Phase",
+            "volume": fft,
+            "logical_axis_order": (0, 1, 2),
+            "series_offset": 0,
+            "autoload_viewer": 1,
+            "primary": True,
+        },
+        {
+            "name": "FOV Native - Read / Third",
+            "volume": np.transpose(
+                fft,
+                (0, 2, 1),
+            ),
+            "logical_axis_order": (0, 2, 1),
+            "series_offset": 1,
+            "autoload_viewer": 2,
+            "primary": False,
+        },
+        {
+            "name": "FOV Native - Phase / Third",
+            "volume": np.transpose(
+                fft,
+                (1, 2, 0),
+            ),
+            "logical_axis_order": (1, 2, 0),
+            "series_offset": 2,
+            "autoload_viewer": 3,
+            "primary": False,
+        },
+    ]
+
+    for result_index, view in enumerate(
+        native_views
+    ):
+        DICOM.write_dicom(
+            view["volume"],
+            task,
+            folder
+            + "/"
+            + mri4all_taskdata.DICOM,
+            series_offset=(
+                view["series_offset"]
+            ),
+            name=view["name"],
+            primary_result=(
+                view["primary"]
+            ),
+            autoload_viewer=(
+                view["autoload_viewer"]
+            ),
+            result_index=result_index,
+            logical_axis_order=(
+                view["logical_axis_order"]
+            ),
+        )
 
     # kSpace = np.angle(kSpace)
     kSpace = 100 * (kSpace - kSpace.min()) / (kSpace.max() - kSpace.min())
@@ -157,22 +223,22 @@ def run_reconstruction_basic3d(folder: str, task: ScanTask) -> bool:
         kSpace,
         task,
         folder + "/" + mri4all_taskdata.DICOM,
-        series_offset=1,
+        series_offset=3,
         name="k-Space",
         primary_result=False,
-        autoload_viewer=2,
-        result_index=2,
+        autoload_viewer=0,
+        result_index=3,
     )
 
     DICOM.write_dicom(
         np.angle(fft),
         task,
         folder + "/" + mri4all_taskdata.DICOM,
-        series_offset=2,
+        series_offset=4,
         name="Phase",
         primary_result=False,
-        result_index=3,
-        autoload_viewer=3,
+        result_index=4,
+        autoload_viewer=0,
     )
 
     return True
