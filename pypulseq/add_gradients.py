@@ -66,10 +66,30 @@ def add_gradients(grads: Union[list, tuple], system=Opts(), max_grad: int = 0, m
                          g.delay - common_delay + g.rise_time + g.flat_time + g.fall_time]
                 amplitudes = [0, g.amplitude, g.amplitude, 0]
             else:
-                times = [g.delay - common_delay,
-                         g.delay - common_delay + g.rise_time,
-                         g.delay - common_delay + g.rise_time + g.flat_time]
-                amplitudes = [0, g.amplitude, 0]
+                # Triangle gradient:
+                #
+                # flat_time == 0, but the falling ramp still
+                # exists and must be included in the rasterized
+                # waveform.
+                start_time = (
+                    g.delay
+                    - common_delay
+                )
+
+                times = [
+                    start_time,
+                    start_time
+                    + g.rise_time,
+                    start_time
+                    + g.rise_time
+                    + g.fall_time,
+                ]
+
+                amplitudes = [
+                    0,
+                    g.amplitude,
+                    0,
+                ]
             waveforms[ii] = points_to_waveform(times=times, amplitudes=amplitudes,
                                                grad_raster_time=system.grad_raster_time)
         else:

@@ -12,7 +12,9 @@ from sequences.common.gradient_transform import (
     logical_gradient_safety_scale,
     transform_gradient_events,
 )
-
+from pypulseq.add_gradients import (
+    add_gradients,
+)
 
 def _make_system():
     return pp.Opts(
@@ -264,4 +266,62 @@ def test_axis_aligned_gradient_safety_scale():
     np.testing.assert_allclose(
         limit_scale,
         1.0,
+    )
+def test_add_gradients_preserves_triangle_fall():
+    system = _make_system()
+
+    # A perfectly legal triangle.
+    #
+    # Its slew is only 40% of the physical
+    # system limit.
+    triangle_rise_time = 40e-6
+
+    triangle_amplitude = (
+        0.40
+        * system.max_slew
+        * triangle_rise_time
+    )
+
+    triangle = pp.make_trapezoid(
+        channel="x",
+        amplitude=triangle_amplitude,
+        rise_time=triangle_rise_time,
+        flat_time=0.0,
+        system=system,
+    )
+
+    # A longer gradient forces add_gradients()
+    # to rasterize and zero-pad both events.
+    companion = pp.make_trapezoid(
+        channel="x",
+        amplitude=(
+            0.01
+            * system.max_slew
+            * 20e-6
+        ),
+        rise_time=20e-6,
+        flat_time=60e-6,
+        system=system,
+    )
+
+    combined = add_gradients(
+        grads=[
+            triangle,
+            companion,
+        ],
+        system=system,
+    )
+
+    slew = (
+        np.diff(
+            combined.waveform
+        )
+        / system.grad_raster_time
+    )
+
+    assert (
+        np.max(
+            np.abs(slew)
+        )
+        < system.max_slew
     )
