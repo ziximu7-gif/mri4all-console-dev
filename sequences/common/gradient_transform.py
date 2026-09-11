@@ -230,3 +230,62 @@ def add_gradient_block(
     seq.add_block(
         *events
     )
+
+def logical_gradient_safety_scale(
+    logical_to_scanner,
+    safety_margin=0.95,
+):
+    """
+    Return a conservative logical gradient limit scale
+    for an oblique logical-to-scanner transform.
+
+    If several logical gradients are active at the same
+    time:
+
+        G_scanner = M @ G_logical
+
+    then the worst physical-axis amplification is bounded
+    by the largest absolute row sum of M.
+    """
+
+    if logical_to_scanner is None:
+        return 1.0, 1.0
+
+    matrix = np.asarray(
+        logical_to_scanner,
+        dtype=float,
+    )
+
+    if matrix.shape != (3, 3):
+        raise ValueError(
+            "logical_to_scanner must be 3x3."
+        )
+
+    if not np.all(
+        np.isfinite(matrix)
+    ):
+        raise ValueError(
+            "logical_to_scanner must be finite."
+        )
+
+    mixing_bound = float(
+        np.max(
+            np.sum(
+                np.abs(matrix),
+                axis=1,
+            )
+        )
+    )
+
+    if mixing_bound <= 1.0 + 1e-9:
+        return mixing_bound, 1.0
+
+    limit_scale = (
+        float(safety_margin)
+        / mixing_bound
+    )
+
+    return (
+        mixing_bound,
+        limit_scale,
+    )

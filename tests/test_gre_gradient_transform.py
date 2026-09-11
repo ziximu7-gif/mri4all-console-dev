@@ -4,6 +4,14 @@ import pypulseq as pp
 from sequences.common.gradient_transform import (
     transform_gradient_events,
 )
+from common.geometry import (
+    planning_euler_to_matrix,
+)
+
+from sequences.common.gradient_transform import (
+    logical_gradient_safety_scale,
+    transform_gradient_events,
+)
 
 
 def _make_system():
@@ -210,4 +218,50 @@ def test_gradient_transform_combines_axes():
         expected_y,
         rtol=1e-6,
         atol=1e-6,
+    )
+def test_oblique_gradient_safety_scale():
+    rotation = (
+        planning_euler_to_matrix(
+            20.0,
+            30.0,
+            40.0,
+        )
+    )
+
+    (
+        mixing_bound,
+        limit_scale,
+    ) = logical_gradient_safety_scale(
+        rotation
+    )
+
+    assert mixing_bound > 1.0
+    assert limit_scale < 1.0
+
+    physical_bound = (
+        mixing_bound
+        * limit_scale
+    )
+
+    np.testing.assert_allclose(
+        physical_bound,
+        0.95,
+        atol=1e-12,
+    )
+def test_axis_aligned_gradient_safety_scale():
+    (
+        mixing_bound,
+        limit_scale,
+    ) = logical_gradient_safety_scale(
+        np.eye(3)
+    )
+
+    np.testing.assert_allclose(
+        mixing_bound,
+        1.0,
+    )
+
+    np.testing.assert_allclose(
+        limit_scale,
+        1.0,
     )

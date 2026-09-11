@@ -11,7 +11,10 @@ from common.geometry import (
     planning_euler_to_matrix,
     resolve_encoding_geometry,
 )
-
+from common.geometry import (
+    planning_euler_to_matrix,
+    planning_matrix_to_euler,
+)
 def test_mm_to_m():
     np.testing.assert_allclose(
         mm_to_m(200.0),
@@ -298,5 +301,31 @@ def test_rotated_encoding_center():
             -0.01,
             0.0,
         ],
+        atol=1e-12,
+    )
+def test_planning_rotation_roundtrip():
+    original = (
+        planning_euler_to_matrix(
+            17.0,
+            -23.0,
+            41.0,
+        )
+    )
+
+    angles = (
+        planning_matrix_to_euler(
+            original
+        )
+    )
+
+    reconstructed = (
+        planning_euler_to_matrix(
+            *angles
+        )
+    )
+
+    np.testing.assert_allclose(
+        reconstructed,
+        original,
         atol=1e-12,
     )

@@ -11,14 +11,13 @@ from common.geometry import (
     cm_to_m,
     orientation_channels,
 )
-from sequences.common.gradient_transform import (
-    add_gradient_block,
-)
-
 from sequences.common.rf_positioning import (
     apply_centered_rf_frequency_modulation,
 )
-
+from sequences.common.gradient_transform import (
+    add_gradient_block,
+    logical_gradient_safety_scale,
+)
 log = logger.get_logger()
 
 def pypulseq_gre3D(
@@ -257,6 +256,29 @@ def pypulseq_gre3D(
         rf_raster_time=1e-6,
         adc_dead_time=20e-6,
     )
+    mixing_bound, multi_axis_limit_scale = (
+        logical_gradient_safety_scale(
+            logical_to_scanner
+        )
+    )
+
+    multi_axis_max_grad = (
+        system.max_grad
+        * multi_axis_limit_scale
+    )
+
+    multi_axis_max_slew = (
+        system.max_slew
+        * multi_axis_limit_scale
+    )
+
+    if logical_to_scanner is not None:
+        log.info(
+            "GRE oblique gradient safety: "
+            f"mixing_bound={mixing_bound:.6f}, "
+            f"logical_limit_scale="
+            f"{multi_axis_limit_scale:.6f}"
+        )
 
     gslab = None
     gslab_rephase = None
@@ -349,6 +371,8 @@ def pypulseq_gre3D(
     gx_pre = pp.make_trapezoid(
         channel=ch0,
         area=gx.area / 2.0,
+        max_grad=multi_axis_max_grad,
+        max_slew=multi_axis_max_slew,
         system=system,
     )
     gx_pre.amplitude = -gx_pre.amplitude
@@ -379,13 +403,29 @@ def pypulseq_gre3D(
 
     gy_pre = pp.make_trapezoid(
         channel=ch1,
-        area=1.0 * np.max(phase_areas0),
+        area=float(
+            np.max(
+                np.abs(
+                    phase_areas0
+                )
+            )
+        ),
+        max_grad=multi_axis_max_grad,
+        max_slew=multi_axis_max_slew,
         system=system,
     )
 
     gz_pre = pp.make_trapezoid(
         channel=ch2,
-        area=-1.0 * np.max(phase_areas1),
+        area=float(
+            np.max(
+                np.abs(
+                    phase_areas1
+                )
+            )
+        ),
+        max_grad=multi_axis_max_grad,
+        max_slew=multi_axis_max_slew,
         system=system,
     )
 
@@ -402,6 +442,8 @@ def pypulseq_gre3D(
     gx_spoil = pp.make_trapezoid(
         channel=ch0,
         area=Nx * delta_kx,
+        max_grad=multi_axis_max_grad,
+        max_slew=multi_axis_max_slew,
         system=system,
     )
 
@@ -631,6 +673,8 @@ def pypulseq_gre3D(
                 area=-1.0
                 * phase_areas0[pe_idx],
                 duration=pre_duration,
+                max_grad=multi_axis_max_grad,
+                max_slew=multi_axis_max_slew,
                 system=system,
             )
 
@@ -639,6 +683,8 @@ def pypulseq_gre3D(
                 area=-1.0
                 * phase_areas1[pe_idx],
                 duration=pre_duration,
+                max_grad=multi_axis_max_grad,
+                max_slew=multi_axis_max_slew,
                 system=system,
             )
 
