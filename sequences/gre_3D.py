@@ -172,9 +172,9 @@ class SequenceGRE_3D(PulseqSequence, registry_key=Path(__file__).stem):
         self.param_BW = widget.BW_SpinBox.value()
         self.param_trajectory = widget.Trajectory_ComboBox.currentText()
         self.param_ordering = widget.Ordering_ComboBox.currentText()
-        self.param_FA = widget.FA_SpinBox.value()
-        self.validate_parameters(scan_task)
+        self.param_FA = (widget.FA_SpinBox.value())
         self.param_readout_direction = (widget.ReadoutDirection_ComboBox.currentText())
+        self.validate_parameters(scan_task)
         return self.is_valid()
 
     def validate_parameters(self, scan_task) -> bool:
@@ -214,13 +214,6 @@ class SequenceGRE_3D(PulseqSequence, registry_key=Path(__file__).stem):
             fov_m = (
                 planned_encoding.fov_logical_m
             )
-            scan_task.other[
-                "geometry_application"
-            ][
-                "readout_direction"
-            ] = (
-                self.param_readout_direction
-            )
 
             scan_task.other[
                 "geometry_application"
@@ -228,6 +221,9 @@ class SequenceGRE_3D(PulseqSequence, registry_key=Path(__file__).stem):
                 "fov_size": True,
                 "encoding_orientation": (
                     self.param_orientation
+                ),
+                "readout_direction": (
+                    self.param_readout_direction
                 ),
                 "gradient_transform": True,
                 "translation": True,
