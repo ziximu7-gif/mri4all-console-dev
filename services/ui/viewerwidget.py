@@ -25,6 +25,7 @@ from services.ui.spatialbox import PlanningState
 from common.geometry import (
     orientation_plane_axes,
     planning_euler_to_matrix,
+    planning_matrix_to_euler,
 )
 
 log = logger.get_logger()
@@ -99,6 +100,16 @@ class ViewerWidget(QWidget):
         # Prevent recursive updates when one viewer
         # updates another viewer.
         self.updating_planning_rois = False
+        # State of the ROI currently being manipulated.
+        #
+        # This lets us distinguish:
+        #   move
+        #   resize
+        #   rotate
+        #
+        # instead of rewriting all Box3D properties
+        # for every sigRegionChanged event.
+        self._planning_interactions = {}
 
         self.set_empty_viewer()
 
@@ -116,6 +127,8 @@ class ViewerWidget(QWidget):
         self.shim_roi = None
         self.fov_label = None
         self.shim_label = None
+
+        self._planning_interactions.clear()
 
         self.viewer_mode = "empty"
 
@@ -182,50 +195,95 @@ class ViewerWidget(QWidget):
         except ValueError:
             return None, None
             
-    def _projected_box_geometry(self, box):
+    def _projection_components(
+        self,
+        box,
+    ):
         """
-        Project the rotated 3D box into the current localizer plane.
-        Returns:
-            width, height, angle
-        Width and height are normalized to the localizer image size.
+        Return the matrix that maps the
+        3D box-local sizes into the visible
+        width/height of this viewer.
+
+        projected_size =
+            size_matrix @ [sx, sy, sz]
         """
-        rotation = planning_euler_to_matrix(
-            box.rotation_x,
-            box.rotation_y,
-            box.rotation_z,
+
+        rotation = (
+            planning_euler_to_matrix(
+                box.rotation_x,
+                box.rotation_y,
+                box.rotation_z,
+            )
         )
 
-        if self.planning_orientation == "Axial":
-            plane_axes = np.array([
-                [1.0, 0.0, 0.0],
-                [0.0, 1.0, 0.0],
-            ])
+        if (
+            self.planning_orientation
+            == "Axial"
+        ):
+            plane_axes = np.array(
+                [
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                ]
+            )
+
             primary_axis = 0
-        elif self.planning_orientation == "Coronal":
-            plane_axes = np.array([
-                [1.0, 0.0, 0.0],
-                [0.0, 0.0, 1.0],
-            ])
+
+        elif (
+            self.planning_orientation
+            == "Coronal"
+        ):
+            plane_axes = np.array(
+                [
+                    [1.0, 0.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                ]
+            )
+
             primary_axis = 0
-        elif self.planning_orientation == "Sagittal":
-            plane_axes = np.array([
-                [0.0, 1.0, 0.0],
-                [0.0, 0.0, 1.0],
-            ])
+
+        elif (
+            self.planning_orientation
+            == "Sagittal"
+        ):
+            plane_axes = np.array(
+                [
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                ]
+            )
+
             primary_axis = 1
+
         else:
-            return 0.0, 0.0, 0.0
+            return None
 
-        projected_axes = plane_axes @ rotation
+        projected_axes = (
+            plane_axes
+            @ rotation
+        )
 
-        half_sizes = np.array([
-            box.size_x,
-            box.size_y,
-            box.size_z,
-        ]) / 2.0
+        sizes = np.array(
+            [
+                box.size_x,
+                box.size_y,
+                box.size_z,
+            ],
+            dtype=float,
+        )
 
-        primary = projected_axes[:, primary_axis]
-        primary_norm = np.linalg.norm(primary)
+        primary = (
+            projected_axes[
+                :,
+                primary_axis,
+            ]
+        )
+
+        primary_norm = (
+            np.linalg.norm(
+                primary
+            )
+        )
 
         if primary_norm < 1e-9:
             projected_lengths = (
@@ -233,47 +291,63 @@ class ViewerWidget(QWidget):
                     projected_axes,
                     axis=0,
                 )
-                * half_sizes
+                * sizes
             )
 
             primary_axis = int(
-                np.argmax(projected_lengths)
+                np.argmax(
+                    projected_lengths
+                )
             )
 
-            primary = projected_axes[:, primary_axis]
-            primary_norm = np.linalg.norm(primary)
+            primary = (
+                projected_axes[
+                    :,
+                    primary_axis,
+                ]
+            )
+
+            primary_norm = (
+                np.linalg.norm(
+                    primary
+                )
+            )
 
         if primary_norm < 1e-9:
-            return 0.0, 0.0, 0.0
+            return None
 
         horizontal_direction = (
-            primary / primary_norm
+            primary
+            / primary_norm
         )
 
-        if horizontal_direction[0] < 0:
+        # Keep a stable angle representation.
+        if (
+            horizontal_direction[0]
+            < 0
+        ):
             horizontal_direction = (
                 -horizontal_direction
             )
 
-        vertical_direction = np.array([
-            -horizontal_direction[1],
-            horizontal_direction[0],
-        ])
-
-        half_width = np.sum(
-            half_sizes
-            * np.abs(
-                horizontal_direction
-                @ projected_axes
-            )
+        vertical_direction = np.array(
+            [
+                -horizontal_direction[1],
+                horizontal_direction[0],
+            ]
         )
 
-        half_height = np.sum(
-            half_sizes
-            * np.abs(
-                vertical_direction
-                @ projected_axes
-            )
+        size_matrix = np.vstack(
+            [
+                np.abs(
+                    horizontal_direction
+                    @ projected_axes
+                ),
+                np.abs(
+                    vertical_direction
+                    @ projected_axes
+                ),
+            ]
         )
 
         angle = np.rad2deg(
@@ -284,64 +358,70 @@ class ViewerWidget(QWidget):
         )
 
         return (
-            2.0 * half_width,
-            2.0 * half_height,
+            size_matrix,
             float(angle),
         )
 
-    def _plane_rotation_axis(self):
+
+    def _projected_box_geometry(
+        self,
+        box,
+    ):
         """
-        Return the Box3D rotation component corresponding
-        to the current localizer plane.
-
-        Axial XY:
-            in-plane rotation is around Z
-
-        Coronal XZ:
-            in-plane rotation is around Y
-
-        Sagittal YZ:
-            in-plane rotation is around X
+        Project the rotated 3D Box3D into
+        this localizer plane.
         """
 
-        if self.planning_orientation == "Axial":
-            return "z"
+        projection = (
+            self._projection_components(
+                box
+            )
+        )
 
-        if self.planning_orientation == "Coronal":
-            return "y"
+        if projection is None:
+            return (
+                0.0,
+                0.0,
+                0.0,
+            )
 
-        if self.planning_orientation == "Sagittal":
-            return "x"
+        (
+            size_matrix,
+            angle,
+        ) = projection
 
-        return None
+        sizes = np.array(
+            [
+                box.size_x,
+                box.size_y,
+                box.size_z,
+            ],
+            dtype=float,
+        )
 
-    def _box_angle(self, box):
+        projected_size = (
+            size_matrix
+            @ sizes
+        )
+
+        return (
+            float(projected_size[0]),
+            float(projected_size[1]),
+            angle,
+        )
+
+
+    def _box_angle(
+        self,
+        box,
+    ):
         _, _, angle = (
-            self._projected_box_geometry(box)
+            self._projected_box_geometry(
+                box
+            )
         )
 
         return angle
-
-    def _set_box_angle(
-        self,
-        box,
-        angle,
-    ):
-
-        rotation_axis = (
-            self._plane_rotation_axis()
-        )
-
-        if rotation_axis is None:
-            return
-
-        setattr(
-            box,
-            f"rotation_{rotation_axis}",
-            float(angle),
-        )
-
-        box.clamp()
 
     def _planning_image_size(self):
 
@@ -438,18 +518,15 @@ class ViewerWidget(QWidget):
             roi_width,
             roi_height,
         )
-    def _roi_to_box(
+    def _roi_geometry_normalized(
         self,
         roi,
-        box,
     ):
         """
-        Update shared Box3D from the current 2D ROI.
+        Read ROI center, size and angle.
 
-        Supports:
-            translation
-            resizing
-            rotation
+        Center and size are returned in
+        normalized localizer coordinates.
         """
 
         image_size = (
@@ -457,24 +534,18 @@ class ViewerWidget(QWidget):
         )
 
         if image_size is None:
-            return
+            return None
 
-        image_width, image_height = (
-            image_size
-        )
+        (
+            image_width,
+            image_height,
+        ) = image_size
 
         if (
             image_width <= 0
             or image_height <= 0
         ):
-            return
-
-        horizontal_axis, vertical_axis = (
-            self._plane_axes()
-        )
-
-        if horizontal_axis is None:
-            return
+            return None
 
         size = roi.size()
 
@@ -485,16 +556,6 @@ class ViewerWidget(QWidget):
         roi_height = float(
             size.y()
         )
-
-        # -------------------------------------------------
-        # IMPORTANT:
-        #
-        # roi.pos() + size / 2 is NOT correct after
-        # rotation.
-        #
-        # The ROI center must be mapped from ROI-local
-        # coordinates into the parent image coordinates.
-        # -------------------------------------------------
 
         local_center = QPointF(
             roi_width / 2.0,
@@ -507,57 +568,490 @@ class ViewerWidget(QWidget):
             )
         )
 
-        horizontal_center = (
-            float(parent_center.x())
-            / image_width
+        center = np.array(
+            [
+                float(
+                    parent_center.x()
+                )
+                / image_width,
+
+                float(
+                    parent_center.y()
+                )
+                / image_height,
+            ],
+            dtype=float,
         )
 
-        vertical_center = (
-            float(parent_center.y())
-            / image_height
+        normalized_size = np.array(
+            [
+                roi_width
+                / image_width,
+
+                roi_height
+                / image_height,
+            ],
+            dtype=float,
         )
 
-        horizontal_size = (
-            roi_width
-            / image_width
+        return (
+            center,
+            normalized_size,
+            float(
+                roi.angle()
+            ),
         )
 
-        vertical_size = (
-            roi_height
-            / image_height
+
+    def _begin_planning_roi_interaction(
+        self,
+        roi,
+        box,
+    ):
+        if self.updating_planning_rois:
+            return
+
+        geometry = (
+            self._roi_geometry_normalized(
+                roi
+            )
         )
+
+        if geometry is None:
+            return
+
+        (
+            _,
+            roi_size,
+            roi_angle,
+        ) = geometry
+
+        self._planning_interactions[
+            id(roi)
+        ] = {
+            "last_size": (
+                roi_size.copy()
+            ),
+            "last_angle": (
+                roi_angle
+            ),
+            "rotation_matrix": (
+                planning_euler_to_matrix(
+                    box.rotation_x,
+                    box.rotation_y,
+                    box.rotation_z,
+                )
+            ),
+        }
+
+
+    def _update_box_center_from_roi(
+        self,
+        box,
+        center,
+    ):
+        (
+            horizontal_axis,
+            vertical_axis,
+        ) = self._plane_axes()
+
+        if horizontal_axis is None:
+            return
 
         setattr(
             box,
             f"center_{horizontal_axis}",
-            horizontal_center,
+            float(center[0]),
         )
 
         setattr(
             box,
             f"center_{vertical_axis}",
-            vertical_center,
+            float(center[1]),
         )
 
-        setattr(
-            box,
-            f"size_{horizontal_axis}",
-            horizontal_size,
+
+    def _update_box_size_from_roi(
+        self,
+        box,
+        target_size,
+    ):
+        """
+        Resize the 3D box while preserving
+        the current 3D rotation.
+
+        A 2D projection provides two size
+        constraints for three Box3D sizes,
+        so use the minimum-change solution.
+        """
+
+        projection = (
+            self._projection_components(
+                box
+            )
         )
 
-        setattr(
-            box,
-            f"size_{vertical_axis}",
-            vertical_size,
+        if projection is None:
+            return
+
+        (
+            size_matrix,
+            _,
+        ) = projection
+
+        current_sizes = np.array(
+            [
+                box.size_x,
+                box.size_y,
+                box.size_z,
+            ],
+            dtype=float,
         )
 
-        # Save current in-plane rotation
-        self._set_box_angle(
-            box,
-            roi.angle(),
+        current_projection = (
+            size_matrix
+            @ current_sizes
         )
+
+        projection_error = (
+            target_size
+            - current_projection
+        )
+
+        # Minimum-norm size correction:
+        #
+        #     A * ds = requested 2D change
+        #
+        # This automatically gives the intuitive
+        # result at zero rotation:
+        #
+        # Axial    -> X / Y
+        # Coronal  -> X / Z
+        # Sagittal -> Y / Z
+        delta_sizes = (
+            np.linalg.pinv(
+                size_matrix,
+                rcond=1e-6,
+            )
+            @ projection_error
+        )
+
+        new_sizes = (
+            current_sizes
+            + delta_sizes
+        )
+
+        if not np.all(
+            np.isfinite(
+                new_sizes
+            )
+        ):
+            return
+
+        new_sizes = np.clip(
+            new_sizes,
+            0.02,
+            1.0,
+        )
+
+        box.size_x = float(
+            new_sizes[0]
+        )
+
+        box.size_y = float(
+            new_sizes[1]
+        )
+
+        box.size_z = float(
+            new_sizes[2]
+        )
+
+
+    def _plane_delta_rotation(
+        self,
+        angle_delta,
+    ):
+        """
+        Build a scanner-space rotation
+        corresponding to an in-plane mouse
+        rotation in this viewer.
+        """
+
+        if (
+            self.planning_orientation
+            == "Axial"
+        ):
+            return (
+                planning_euler_to_matrix(
+                    0.0,
+                    0.0,
+                    angle_delta,
+                )
+            )
+
+        if (
+            self.planning_orientation
+            == "Coronal"
+        ):
+            return (
+                planning_euler_to_matrix(
+                    0.0,
+                    angle_delta,
+                    0.0,
+                )
+            )
+
+        if (
+            self.planning_orientation
+            == "Sagittal"
+        ):
+            return (
+                planning_euler_to_matrix(
+                    angle_delta,
+                    0.0,
+                    0.0,
+                )
+            )
+
+        return np.eye(
+            3,
+            dtype=float,
+        )
+
+
+    def _update_box_rotation_from_roi(
+        self,
+        box,
+        interaction,
+        current_angle,
+    ):
+        previous_angle = float(
+            interaction[
+                "last_angle"
+            ]
+        )
+
+        angle_delta = (
+            (
+                current_angle
+                - previous_angle
+                + 180.0
+            )
+            % 360.0
+            - 180.0
+        )
+
+        if abs(angle_delta) < 1e-4:
+            return
+
+        delta_rotation = (
+            self._plane_delta_rotation(
+                angle_delta
+            )
+        )
+
+        current_rotation = (
+            interaction[
+                "rotation_matrix"
+            ]
+        )
+
+        # In-plane rotation is around a
+        # scanner-space axis, therefore
+        # pre-multiply the existing local-to-
+        # scanner rotation.
+        new_rotation = (
+            delta_rotation
+            @ current_rotation
+        )
+
+        (
+            rotation_x,
+            rotation_y,
+            rotation_z,
+        ) = planning_matrix_to_euler(
+            new_rotation
+        )
+
+        box.rotation_x = (
+            rotation_x
+        )
+
+        box.rotation_y = (
+            rotation_y
+        )
+
+        box.rotation_z = (
+            rotation_z
+        )
+
+        interaction[
+            "rotation_matrix"
+        ] = new_rotation
+
+
+    def _roi_to_box(
+        self,
+        roi,
+        box,
+    ):
+        """
+        Update Box3D according to the actual
+        type of ROI manipulation.
+
+        Move:
+            center only
+
+        Resize:
+            center + size
+
+        Rotate:
+            center + rotation
+
+        Size and rotation are never modified
+        simultaneously merely because
+        sigRegionChanged was emitted.
+        """
+
+        geometry = (
+            self._roi_geometry_normalized(
+                roi
+            )
+        )
+
+        if geometry is None:
+            return
+
+        (
+            center,
+            current_size,
+            current_angle,
+        ) = geometry
+
+        interaction = (
+            self._planning_interactions.get(
+                id(roi)
+            )
+        )
+
+        # Safety fallback if PyQtGraph emits
+        # Changed without Started.
+        if interaction is None:
+            self._begin_planning_roi_interaction(
+                roi,
+                box,
+            )
+
+            interaction = (
+                self._planning_interactions.get(
+                    id(roi)
+                )
+            )
+
+        if interaction is None:
+            return
+
+        previous_size = (
+            interaction[
+                "last_size"
+            ]
+        )
+
+        previous_angle = float(
+            interaction[
+                "last_angle"
+            ]
+        )
+
+        angle_delta = (
+            (
+                current_angle
+                - previous_angle
+                + 180.0
+            )
+            % 360.0
+            - 180.0
+        )
+
+        size_changed = (
+            np.max(
+                np.abs(
+                    current_size
+                    - previous_size
+                )
+            )
+            > 1e-6
+        )
+
+        angle_changed = (
+            abs(angle_delta)
+            > 1e-4
+        )
+
+        # Translation is valid for all
+        # interaction types.
+        self._update_box_center_from_roi(
+            box,
+            center,
+        )
+
+        if angle_changed:
+            # ROTATE:
+            # preserve Box3D size.
+            self._update_box_rotation_from_roi(
+                box,
+                interaction,
+                current_angle,
+            )
+
+        elif size_changed:
+            # RESIZE:
+            # preserve Box3D rotation.
+            self._update_box_size_from_roi(
+                box,
+                current_size,
+            )
+
+        # Otherwise this was just MOVE:
+        # center has already been updated.
 
         box.clamp()
+
+        interaction[
+            "last_size"
+        ] = current_size.copy()
+
+        interaction[
+            "last_angle"
+        ] = current_angle
+
+
+    def _finish_planning_roi_interaction(
+        self,
+        roi,
+        box,
+    ):
+        self._planning_interactions.pop(
+            id(roi),
+            None,
+        )
+
+        # At mouse release, make the active
+        # ROI exactly match the resolved Box3D.
+        #
+        # Do NOT do this during every mouse move.
+        self.updating_planning_rois = True
+
+        try:
+            self._apply_box_to_roi(
+                roi,
+                box,
+            )
+
+        finally:
+            self.updating_planning_rois = False
+
+        self._update_planning_labels()
 
     def _apply_box_to_roi(
         self,
@@ -838,12 +1332,29 @@ class ViewerWidget(QWidget):
         # Connect interaction signals
         # -------------------------------------------------
 
+        self.fov_roi.sigRegionChangeStarted.connect(
+            self._fov_roi_change_started
+        )
+
         self.fov_roi.sigRegionChanged.connect(
             self._fov_roi_changed
         )
 
+        self.fov_roi.sigRegionChangeFinished.connect(
+            self._fov_roi_change_finished
+        )
+
+
+        self.shim_roi.sigRegionChangeStarted.connect(
+            self._shim_roi_change_started
+        )
+
         self.shim_roi.sigRegionChanged.connect(
             self._shim_roi_changed
+        )
+
+        self.shim_roi.sigRegionChangeFinished.connect(
+            self._shim_roi_change_finished
         )
         self._apply_box_to_roi(
             self.fov_roi,
@@ -909,15 +1420,33 @@ class ViewerWidget(QWidget):
                 float(shim_pos.y()),
             )
 
-    def _fov_roi_changed(self):
+    def _fov_roi_change_started(
+        self,
+        *args,
+    ):
+        if (
+            self.fov_roi is None
+            or self.planning_state is None
+        ):
+            return
 
+        self._begin_planning_roi_interaction(
+            self.fov_roi,
+            self.planning_state.fov_box,
+        )
+
+
+    def _fov_roi_changed(
+        self,
+        *args,
+    ):
         if self.updating_planning_rois:
             return
 
-        if self.planning_state is None:
-            return
-
-        if self.fov_roi is None:
+        if (
+            self.planning_state is None
+            or self.fov_roi is None
+        ):
             return
 
         self._roi_to_box(
@@ -930,15 +1459,51 @@ class ViewerWidget(QWidget):
         self.planning_changed.emit()
 
 
-    def _shim_roi_changed(self):
+    def _fov_roi_change_finished(
+        self,
+        *args,
+    ):
+        if (
+            self.fov_roi is None
+            or self.planning_state is None
+        ):
+            return
 
+        self._finish_planning_roi_interaction(
+            self.fov_roi,
+            self.planning_state.fov_box,
+        )
+
+        self.planning_changed.emit()
+
+
+    def _shim_roi_change_started(
+        self,
+        *args,
+    ):
+        if (
+            self.shim_roi is None
+            or self.planning_state is None
+        ):
+            return
+
+        self._begin_planning_roi_interaction(
+            self.shim_roi,
+            self.planning_state.shim_box,
+        )
+
+
+    def _shim_roi_changed(
+        self,
+        *args,
+    ):
         if self.updating_planning_rois:
             return
 
-        if self.planning_state is None:
-            return
-
-        if self.shim_roi is None:
+        if (
+            self.planning_state is None
+            or self.shim_roi is None
+        ):
             return
 
         self._roi_to_box(
@@ -947,6 +1512,24 @@ class ViewerWidget(QWidget):
         )
 
         self._update_planning_labels()
+
+        self.planning_changed.emit()
+
+
+    def _shim_roi_change_finished(
+        self,
+        *args,
+    ):
+        if (
+            self.shim_roi is None
+            or self.planning_state is None
+        ):
+            return
+
+        self._finish_planning_roi_interaction(
+            self.shim_roi,
+            self.planning_state.shim_box,
+        )
 
         self.planning_changed.emit()
 

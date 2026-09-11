@@ -214,8 +214,36 @@ def update_scan_queue_list() -> bool:
                 temp_scan = task.read_task(mri4all_paths.DATA_COMPLETE + "/" + folder)
                 if len(temp_scan.results) > 0:
                     entry.has_results = True
-        if os.path.isdir(mri4all_paths.DATA_FAILURE + "/" + folder):
-            current_state = mri4all_states.FAILURE
+        if os.path.isdir(
+            mri4all_paths.DATA_FAILURE
+            + "/"
+            + folder
+        ):
+            current_state = (
+                mri4all_states.FAILURE
+            )
+
+            failure_path = (
+                mri4all_paths.DATA_FAILURE
+                + "/"
+                + folder
+            )
+
+            try:
+                temp_scan = task.read_task(
+                    failure_path
+                )
+
+                if len(
+                    temp_scan.results
+                ) > 0:
+                    entry.has_results = True
+
+            except Exception:
+                log.exception(
+                    "Unable to inspect results "
+                    f"for failed scan {folder}"
+                )
 
         # Jobs that have not been found will fall out of the list
         if current_state:

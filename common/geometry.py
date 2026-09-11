@@ -236,6 +236,92 @@ def planning_euler_to_matrix(
         @ rotation_x
     )
 
+def planning_matrix_to_euler(
+    rotation,
+):
+    """
+    Inverse of planning_euler_to_matrix().
+
+    Rotation convention:
+
+        R = Rz @ Ry @ Rx
+
+    The Y-axis sign convention must remain
+    consistent with planning_euler_to_matrix().
+    """
+
+    rotation = np.asarray(
+        rotation,
+        dtype=float,
+    )
+
+    if rotation.shape != (3, 3):
+        raise ValueError(
+            "Planning rotation matrix "
+            "must be 3x3."
+        )
+
+    sin_ry = float(
+        np.clip(
+            rotation[2, 0],
+            -1.0,
+            1.0,
+        )
+    )
+
+    ry = np.arcsin(
+        sin_ry
+    )
+
+    cos_ry = np.cos(
+        ry
+    )
+
+    if abs(cos_ry) > 1e-8:
+        rx = np.arctan2(
+            rotation[2, 1],
+            rotation[2, 2],
+        )
+
+        rz = np.arctan2(
+            rotation[1, 0],
+            rotation[0, 0],
+        )
+
+    else:
+        # Gimbal-lock fallback.
+        #
+        # One degree of freedom is not
+        # uniquely recoverable. Keep Rx
+        # at zero and absorb it into Rz.
+        rx = 0.0
+
+        rz = np.arctan2(
+            -rotation[0, 1],
+            rotation[1, 1],
+        )
+
+    def wrap_degrees(
+        angle_rad,
+    ):
+        angle_deg = np.rad2deg(
+            angle_rad
+        )
+
+        return float(
+            (
+                angle_deg
+                + 180.0
+            )
+            % 360.0
+            - 180.0
+        )
+
+    return (
+        wrap_degrees(rx),
+        wrap_degrees(ry),
+        wrap_degrees(rz),
+    )
 
 def planning_box_to_scan_geometry(
     fov_box: Mapping[str, float],

@@ -1397,12 +1397,24 @@ class ExaminationWindow(QMainWindow):
         """
         One viewer changed the shared Box3D.
 
-        Refresh all three projections.
+        Refresh the OTHER projections while
+        leaving the actively manipulated ROI
+        under direct mouse control.
         """
 
-        self.viewer1.refresh_planning_rois()
-        self.viewer2.refresh_planning_rois()
-        self.viewer3.refresh_planning_rois()
+        source_viewer = (
+            self.sender()
+        )
+
+        for viewer in (
+            self.viewer1,
+            self.viewer2,
+            self.viewer3,
+        ):
+            if viewer is source_viewer:
+                continue
+
+            viewer.refresh_planning_rois()
 
         log.debug(
             "Planning state: "
