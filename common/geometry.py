@@ -537,3 +537,105 @@ def resolve_encoding_geometry(
             logical_to_scanner
         ),
     )
+
+
+_BOX_CORNER_SIGNS = np.array(
+    [
+        [-1, -1, -1],
+        [-1, -1,  1],
+        [-1,  1, -1],
+        [-1,  1,  1],
+        [ 1, -1, -1],
+        [ 1, -1,  1],
+        [ 1,  1, -1],
+        [ 1,  1,  1],
+    ],
+    dtype=float,
+)
+
+
+def planning_box_corners_in_encoding_m(
+    box,
+    reference_fov_mm,
+    acquisition_center_scanner_m,
+    logical_to_scanner,
+):
+    """
+    Convert a planning box (FOV or Shim) into
+    encoding-native logical corner coordinates
+    [m], expressed relative to the acquisition
+    FOV center.
+
+    The reconstruction volume center is already
+    the planned FOV center, so the Shim overlay
+    uses coordinates relative to the FOV center,
+    not absolute scanner-isocenter coordinates.
+
+    Row-vector form of:
+
+        r_logical = M.T @ r_scanner
+    """
+
+    box_geometry = (
+        planning_box_to_scan_geometry(
+            fov_box=box,
+            reference_fov_mm=(
+                reference_fov_mm
+            ),
+        )
+    )
+
+    half_sizes = (
+        0.5
+        * np.asarray(
+            box_geometry.fov_local_m,
+            dtype=float,
+        )
+    )
+
+    local_corners = (
+        _BOX_CORNER_SIGNS
+        * half_sizes
+    )
+
+    scanner_corners = (
+        box_geometry
+        .center_scanner_m[
+            None,
+            :
+        ]
+        +
+        local_corners
+        @ box_geometry
+        .rotation_local_to_scanner.T
+    )
+
+    logical_to_scanner = np.asarray(
+        logical_to_scanner,
+        dtype=float,
+    )
+
+    acquisition_center_scanner_m = (
+        np.asarray(
+            acquisition_center_scanner_m,
+            dtype=float,
+        )
+    )
+
+    relative_scanner = (
+        scanner_corners
+        - acquisition_center_scanner_m[
+            None,
+            :
+        ]
+    )
+
+    # Row-vector form of:
+    #
+    # r_logical = M.T @ r_scanner
+    logical_corners = (
+        relative_scanner
+        @ logical_to_scanner
+    )
+
+    return logical_corners

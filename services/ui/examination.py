@@ -1143,6 +1143,20 @@ class ExaminationWindow(QMainWindow):
             fov_box
         )
 
+        shim_box = planning.get(
+            "shim_box"
+        )
+
+        if isinstance(
+            shim_box,
+            dict,
+        ):
+            geometry[
+                "shim_box"
+            ] = dict(
+                shim_box
+            )
+
         try:
             localizer_fov_mm = float(
                 cm_to_mm(

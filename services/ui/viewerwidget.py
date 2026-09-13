@@ -26,6 +26,7 @@ from common.geometry import (
     orientation_plane_axes,
     planning_euler_to_matrix,
     planning_matrix_to_euler,
+    planning_box_corners_in_encoding_m,
 )
 
 log = logger.get_logger()
@@ -92,10 +93,15 @@ class ViewerWidget(QWidget):
         self.planning_state = None
         self.planning_orientation = None
 
+        self.fov_basis_items = []
+
         self.fov_roi = None
         self.shim_roi = None
         self.fov_label = None
         self.shim_label = None
+
+        self.reconstruction_axis_order = None
+        self.reconstruction_overlay_items = []
 
         # Prevent recursive updates when one viewer
         # updates another viewer.
@@ -194,6 +200,194 @@ class ViewerWidget(QWidget):
             )
         except ValueError:
             return None, None
+
+    def _clear_fov_basis_indicator(self):
+        if not isinstance(
+            self.widget,
+            pg.ImageView,
+        ):
+            self.fov_basis_items = []
+            return
+
+        view = self.widget.getView()
+
+        for item in self.fov_basis_items:
+            try:
+                view.removeItem(item)
+            except Exception:
+                pass
+
+        self.fov_basis_items = []
+
+    def _update_fov_basis_indicator(self):
+        self._clear_fov_basis_indicator()
+
+        if (
+            self.planning_state is None
+            or self.planning_orientation is None
+        ):
+            return
+
+        image_size = self._planning_image_size()
+
+        if image_size is None:
+            return
+
+        image_width, image_height = image_size
+
+        box = self.planning_state.fov_box
+
+        rotation = planning_euler_to_matrix(
+            box.rotation_x,
+            box.rotation_y,
+            box.rotation_z,
+        )
+
+        if self.planning_orientation == "Axial":
+            plane_projection = np.array(
+                [
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                ],
+                dtype=float,
+            )
+
+        elif self.planning_orientation == "Coronal":
+            plane_projection = np.array(
+                [
+                    [1.0, 0.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                ],
+                dtype=float,
+            )
+
+        elif self.planning_orientation == "Sagittal":
+            plane_projection = np.array(
+                [
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                ],
+                dtype=float,
+            )
+
+        else:
+            return
+
+        projected_axes = (
+            plane_projection
+            @ rotation
+        )
+
+        horizontal_axis, vertical_axis = (
+            self._plane_axes()
+        )
+
+        center_x = (
+            getattr(
+                box,
+                f"center_{horizontal_axis}",
+            )
+            * image_width
+        )
+
+        center_y = (
+            getattr(
+                box,
+                f"center_{vertical_axis}",
+            )
+            * image_height
+        )
+
+        indicator_length = (
+            0.12
+            * min(
+                image_width,
+                image_height,
+            )
+        )
+
+        axis_specs = (
+            ("X'", 0, "y"),
+            ("Y'", 1, "c"),
+            ("Z'", 2, "m"),
+        )
+
+        view = self.widget.getView()
+
+        for (
+            axis_name,
+            axis_index,
+            color,
+        ) in axis_specs:
+
+            direction = (
+                projected_axes[
+                    :,
+                    axis_index,
+                ]
+            )
+
+            direction_norm = float(
+                np.linalg.norm(direction)
+            )
+
+            # Axis almost perpendicular to
+            # this localizer plane.
+            if direction_norm < 0.10:
+                continue
+
+            direction = (
+                direction
+                / direction_norm
+            )
+
+            end_x = (
+                center_x
+                + indicator_length
+                * direction[0]
+            )
+
+            end_y = (
+                center_y
+                + indicator_length
+                * direction[1]
+            )
+
+            line = pg.PlotDataItem(
+                [
+                    center_x,
+                    end_x,
+                ],
+                [
+                    center_y,
+                    end_y,
+                ],
+                pen=pg.mkPen(
+                    color,
+                    width=3,
+                ),
+            )
+
+            label = pg.TextItem(
+                text=axis_name,
+                color=color,
+                anchor=(0.5, 0.5),
+            )
+
+            label.setPos(
+                end_x,
+                end_y,
+            )
+
+            view.addItem(line)
+            view.addItem(label)
+
+            self.fov_basis_items.extend(
+                [
+                    line,
+                    label,
+                ]
+            )
             
     def _projection_components(
         self,
@@ -1368,6 +1562,8 @@ class ViewerWidget(QWidget):
 
         self._update_planning_labels()
 
+        self._update_fov_basis_indicator()
+
     def _update_planning_labels(self):
         """
         Keep FOV / Shim labels attached to each ROI
@@ -1455,6 +1651,8 @@ class ViewerWidget(QWidget):
         )
 
         self._update_planning_labels()
+
+        self._update_fov_basis_indicator()
 
         self.planning_changed.emit()
 
@@ -1574,6 +1772,417 @@ class ViewerWidget(QWidget):
         # Put it HERE.
         self._update_planning_labels()
 
+        self._update_fov_basis_indicator()
+
+    def set_reconstruction_overlay_context(
+        self,
+        logical_axis_order,
+    ):
+        """
+        Enable read-only acquisition overlays
+        for a FOV-native reconstruction.
+
+        logical_axis_order maps the DICOM
+        array axes to logical axes:
+
+            0 = read
+            1 = phase
+            2 = third
+
+        DICOM axis 0 is the row (vertical),
+        axis 1 is the column (horizontal).
+        """
+
+        self.reconstruction_axis_order = tuple(
+            logical_axis_order
+        )
+
+    def clear_reconstruction_overlay_context(
+        self,
+    ):
+        self.reconstruction_axis_order = None
+        self.reconstruction_overlay_items = []
+
+    def _clear_reconstruction_overlays(self):
+        if not isinstance(
+            self.widget,
+            pg.ImageView,
+        ):
+            self.reconstruction_overlay_items = []
+            self.reconstruction_axis_order = None
+            return
+
+        view = self.widget.getView()
+
+        for item in self.reconstruction_overlay_items:
+            try:
+                view.removeItem(item)
+            except Exception:
+                pass
+
+        self.reconstruction_overlay_items = []
+
+    def create_reconstruction_overlays(
+        self,
+        task,
+    ):
+        """
+        Draw read-only reconstruction overlay
+        items for a FOV-native reconstruction:
+
+            - yellow FOV boundary
+            - "Planned FOV" label
+            - cyan Shim volume projection
+            - axis indicator
+
+        The reconstruction image itself is the
+        oblique FOV, so the FOV boundary is
+        simply the full image boundary.
+        """
+
+        if (
+            self.reconstruction_axis_order
+            is None
+        ):
+            return
+
+        if not isinstance(
+            self.widget,
+            pg.ImageView,
+        ):
+            return
+
+        image_size = (
+            self._planning_image_size()
+        )
+
+        if image_size is None:
+            return
+
+        image_width, image_height = (
+            image_size
+        )
+
+        view = self.widget.getView()
+
+        row_axis = (
+            self.reconstruction_axis_order[0]
+        )
+
+        column_axis = (
+            self.reconstruction_axis_order[1]
+        )
+
+        # -------------------------------------------------
+        # Full-image FOV boundary + label
+        # -------------------------------------------------
+
+        fov_outline = pg.PlotDataItem(
+            [
+                0.0,
+                image_width,
+                image_width,
+                0.0,
+                0.0,
+            ],
+            [
+                0.0,
+                0.0,
+                image_height,
+                image_height,
+                0.0,
+            ],
+            pen=pg.mkPen(
+                "y",
+                width=3,
+            ),
+        )
+
+        view.addItem(
+            fov_outline
+        )
+
+        self.reconstruction_overlay_items.append(
+            fov_outline
+        )
+
+        fov_label = pg.TextItem(
+            text="Planned FOV",
+            color="y",
+            anchor=(0, 1),
+        )
+
+        fov_label.setPos(
+            4.0,
+            4.0,
+        )
+
+        view.addItem(
+            fov_label
+        )
+
+        self.reconstruction_overlay_items.append(
+            fov_label
+        )
+
+        # -------------------------------------------------
+        # Shim box projection
+        # -------------------------------------------------
+
+        geometry = task.other.get(
+            "geometry"
+        )
+
+        resolved_geometry = (
+            task.other.get(
+                "resolved_geometry"
+            )
+        )
+
+        resolved_encoding = (
+            task.other.get(
+                "resolved_encoding"
+            )
+        )
+
+        if (
+            isinstance(
+                geometry,
+                dict,
+            )
+            and isinstance(
+                resolved_geometry,
+                dict,
+            )
+            and isinstance(
+                resolved_encoding,
+                dict,
+            )
+        ):
+
+            shim_box = geometry.get(
+                "shim_box"
+            )
+
+            reference_fov_mm = (
+                geometry.get(
+                    "reference_fov_mm"
+                )
+            )
+
+            acquisition_center_scanner_m = (
+                resolved_geometry.get(
+                    "center_scanner_m"
+                )
+            )
+
+            logical_to_scanner = (
+                resolved_encoding.get(
+                    "logical_to_scanner"
+                )
+            )
+
+            if (
+                isinstance(
+                    shim_box,
+                    dict,
+                )
+                and reference_fov_mm is not None
+                and acquisition_center_scanner_m
+                is not None
+                and logical_to_scanner is not None
+            ):
+
+                try:
+                    fov_m = np.asarray(
+                        resolved_encoding[
+                            "fov_logical_m"
+                        ],
+                        dtype=float,
+                    )
+
+                    shim_corners = (
+                        planning_box_corners_in_encoding_m(
+                            box=shim_box,
+                            reference_fov_mm=(
+                                reference_fov_mm
+                            ),
+                            acquisition_center_scanner_m=(
+                                acquisition_center_scanner_m
+                            ),
+                            logical_to_scanner=(
+                                logical_to_scanner
+                            ),
+                        )
+                    )
+
+                    shim_x = (
+                        shim_corners[
+                            :,
+                            column_axis,
+                        ]
+                        / fov_m[
+                            column_axis
+                        ]
+                        + 0.5
+                    ) * image_width
+
+                    shim_y = (
+                        shim_corners[
+                            :,
+                            row_axis,
+                        ]
+                        / fov_m[
+                            row_axis
+                        ]
+                        + 0.5
+                    ) * image_height
+
+                    shim_pixel_corners = (
+                        np.column_stack(
+                            [
+                                shim_x,
+                                shim_y,
+                            ]
+                        )
+                    )
+
+                    self._draw_box_projection(
+                        shim_pixel_corners,
+                        color="c",
+                        width=2,
+                    )
+
+                except Exception:
+                    log.exception(
+                        "Unable to draw Shim "
+                        "overlay on reconstruction."
+                    )
+
+        # -------------------------------------------------
+        # Axis indicator
+        # -------------------------------------------------
+
+        axis_names = (
+            "Read",
+            "Phase",
+            "Third",
+        )
+
+        indicator_row_name = (
+            axis_names[row_axis]
+        )
+
+        indicator_column_name = (
+            axis_names[column_axis]
+        )
+
+        through_axis = (
+            3
+            - row_axis
+            - column_axis
+        )
+
+        indicator_through_name = (
+            axis_names[through_axis]
+        )
+
+        axis_indicator = pg.TextItem(
+            text=(
+                "Vertical:   "
+                + indicator_row_name
+                + "\n"
+                + "Horizontal: "
+                + indicator_column_name
+                + "\n"
+                + "Through:    "
+                + indicator_through_name
+            ),
+            color="#999999",
+            anchor=(1, 1),
+        )
+
+        axis_indicator.setPos(
+            image_width - 4.0,
+            image_height - 4.0,
+        )
+
+        view.addItem(
+            axis_indicator
+        )
+
+        self.reconstruction_overlay_items.append(
+            axis_indicator
+        )
+
+    def _draw_box_projection(
+        self,
+        corners,
+        color,
+        width,
+    ):
+        """
+        Draw the 12 edges of an 8-corner 3D box
+        in the current 2D view.
+
+        corners must already be expressed in the
+        encoding-native pixel coordinate system.
+        """
+
+        edges = [
+            (0, 1),
+            (1, 3),
+            (3, 2),
+            (2, 0),
+
+            (0, 4),
+            (1, 5),
+            (2, 6),
+            (3, 7),
+
+            (4, 5),
+            (5, 7),
+            (7, 6),
+            (6, 4),
+        ]
+
+        view = self.widget.getView()
+
+        for start_index, end_index in edges:
+
+            line = pg.PlotDataItem(
+                [
+                    corners[
+                        start_index,
+                        0,
+                    ],
+                    corners[
+                        end_index,
+                        0,
+                    ],
+                ],
+                [
+                    corners[
+                        start_index,
+                        1,
+                    ],
+                    corners[
+                        end_index,
+                        1,
+                    ],
+                ],
+                pen=pg.mkPen(
+                    color,
+                    width=width,
+                ),
+            )
+
+            view.addItem(line)
+
+            self.reconstruction_overlay_items.append(
+                line
+            )
+
     def clear_planning_context(self):
         self.planning_orientation = None
         self.planning_state = None
@@ -1613,6 +2222,14 @@ class ViewerWidget(QWidget):
         self.widget.setImage(ArrayDicom)
         self.widget.timeLine.setPen(color=(200, 200, 200), width=8)
         self.widget.timeLine.setHoverPen(color=(255, 255, 255), width=8)
+
+        if (
+            self.reconstruction_axis_order
+            is not None
+        ):
+            self.create_reconstruction_overlays(
+                task
+            )
 
         # viewer_widget.ui.histogram.hide()
         self.widget.ui.roiBtn.hide()
