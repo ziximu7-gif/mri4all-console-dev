@@ -58,6 +58,7 @@ def run_pulseq(
     raw_filename="",
     expected_duration_sec=-1,
     hardware_simulation=False,
+    sim_context=None,
 ):
     """
     Interpret pulseq .seq file through flocra_pulseq
@@ -78,6 +79,11 @@ def run_pulseq(
         expt (flocra_pulseq.interpreter): Default None, pass in existing experiment to continue an object
         plot_instructions (bool): Default None, plot instructions for debugging
         gui_test (bool): Default False, load dummy data for gui testing
+        sim_context: Default None. Optional typed geometry-aware simulation
+            context (common.simulation). When provided (in hardware
+            simulation mode), raw data is synthesized from the fixed
+            scanner-space phantom instead of the legacy orientation-specific
+            phantoms. None preserves the legacy behavior exactly.
 
     Returns:
         numpy.ndarray: Rx data array
@@ -188,7 +194,71 @@ def run_pulseq(
         )
 
         # =========================================================
-        # 1. 2D LOCALIZER SIMULATION
+        # 0. GEOMETRY-AWARE SIMULATION (Phase A)
+        # =========================================================
+        # When the calling sequence passes an explicit typed
+        # simulation context, synthesize raw data from the fixed
+        # scanner-space phantom (common/simulation). Simulation
+        # logic lives in that pure numerical boundary, not here;
+        # this block is only a dispatch. Callers without a context
+        # keep using the legacy branches below unchanged (e.g.
+        # TSE3D/bssfp/FID simulations).
+        # =========================================================
+
+        if sim_context is not None:
+            from common.simulation import (
+                GRE3DSimulationContext,
+                Localizer2DSimulationContext,
+                synthesize_gre3d_raw,
+                synthesize_localizer_kspace,
+            )
+
+            if isinstance(
+                sim_context, GRE3DSimulationContext
+            ):
+                if not (
+                    pe_order_file.exists()
+                    and adc_phase_file.exists()
+                ):
+                    raise RuntimeError(
+                        "GRE3D simulation context requires "
+                        "pe_order.npy and adc_phase.npy "
+                        "written by calculate_sequence"
+                    )
+
+                order = np.load(pe_order_file)
+                adc_phases = np.load(adc_phase_file)
+
+                log.info(
+                    "Geometry-aware GRE3D simulation: "
+                    "sampling fixed scanner-space phantom"
+                )
+
+                rxd = synthesize_gre3d_raw(
+                    sim_context, order, adc_phases
+                )
+
+            elif isinstance(
+                sim_context, Localizer2DSimulationContext
+            ):
+                log.info(
+                    "Geometry-aware Localizer simulation: "
+                    f"{sim_context.orientation} projection of "
+                    "the fixed scanner-space phantom"
+                )
+
+                rxd = synthesize_localizer_kspace(
+                    sim_context
+                )
+
+            else:
+                raise TypeError(
+                    "run_pulseq: unsupported sim_context "
+                    f"type {type(sim_context)}"
+                )
+
+        # =========================================================
+        # 1. 2D LOCALIZER SIMULATION (legacy, filename sniffing)
         # =========================================================
         #
         # localizer creates files such as:
@@ -201,7 +271,7 @@ def run_pulseq(
         # we detect them by their sequence filename.
         # =========================================================
 
-        if "localizer" in seq_name_lower:
+        elif "localizer" in seq_name_lower:
 
             log.info(
                 f"Detected 2D localizer sequence: {seq_name}"

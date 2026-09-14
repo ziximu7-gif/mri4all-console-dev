@@ -16,8 +16,17 @@ from sequences.common import view_sequence
 import common.logger as logger
 from common.types import ResultItem
 import common.config as config
+from common.geometry import cm_to_m
+from common.simulation import (
+    Localizer2DSimulationContext,
+)
 
 log = logger.get_logger()
+
+# Number of integration samples along the unencoded projection axis
+# for the Localizer hardware simulation (deterministic summation of
+# the fixed scanner-space phantom).
+LOCALIZER_SIMULATION_PROJECTION_SAMPLES = 161
 
 
 class SequenceSE_2D(PulseqSequence, registry_key=Path(__file__).stem):
@@ -325,14 +334,54 @@ class SequenceSE_2D(PulseqSequence, registry_key=Path(__file__).stem):
 
         return True
 
+    def build_simulation_context(
+        self,
+        orientation,
+    ):
+        """
+        Adapter layer for the Localizer hardware simulation.
+
+        Builds the typed projection context from plain numerical
+        values only (the pure common/simulation layer must not know
+        ScanTask persistence). The Localizer is scanner-base and
+        centered at the isocenter; its RF is non-selective, so the
+        third scanner axis is unencoded and the image is a projection
+        of the same fixed 3D phantom along that axis.
+        """
+        return Localizer2DSimulationContext(
+            kind="localizer2d",
+            orientation=orientation,
+            fov_m=float(
+                cm_to_m(self.param_FOV)
+            ),
+            n_read=int(self.param_Base_Resolution),
+            n_phase=int(self.param_Base_Resolution),
+            nsa=int(self.param_NSA),
+            n_projection=(
+                LOCALIZER_SIMULATION_PROJECTION_SAMPLES
+            ),
+        )
+
     def run_sequence(self, scan_task) -> bool:
         log.info("Running localizer sequence")
 
         raw_data = {}
 
+        hardware_simulation = (
+            config.get_config().is_hardware_simulation()
+        )
+
         for orientation, seq_file in self.seq_files:
 
             log.info(f"Running localizer group: {orientation}")
+
+            sim_context = None
+            if hardware_simulation:
+                sim_context = (
+                    self.build_simulation_context(
+                        orientation
+                    )
+                )
 
             rxd, rx_t = run_pulseq(
                 seq_file=seq_file,
@@ -349,7 +398,8 @@ class SequenceSE_2D(PulseqSequence, registry_key=Path(__file__).stem):
                 save_msgs=False,
                 gui_test=False,
                 case_path=self.get_working_folder(),
-                hardware_simulation=config.get_config().is_hardware_simulation(),
+                hardware_simulation=hardware_simulation,
+                sim_context=sim_context,
             )
 
             raw_data[orientation] = rxd

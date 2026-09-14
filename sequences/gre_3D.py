@@ -2,7 +2,12 @@ import os
 from pathlib import Path
 import datetime
 
+import numpy as np
 from PyQt5 import uic
+
+from common.simulation import (
+    GRE3DSimulationContext,
+)
 
 import external.seq.adjustments_acq.config as cfg
 from external.seq.adjustments_acq.scripts import (
@@ -423,6 +428,75 @@ class SequenceGRE_3D(PulseqSequence, registry_key=Path(__file__).stem):
             f"{gradient_result.file_path}"
         )
 
+    def build_simulation_context(
+        self,
+        scan_task,
+    ):
+        """
+        Adapter layer: extract plain numerical geometry from the
+        ScanTask and build the typed GRE3D simulation context.
+
+        The pure simulation layer (common/simulation) must not know
+        ScanTask persistence, so all other["resolved_*"] access
+        happens here. Returns None when no resolved geometry is
+        available (legacy non-planned GRE path falls back to the
+        legacy simulation branch in run_pulseq).
+        """
+        resolved_geometry = scan_task.other.get(
+            "resolved_geometry"
+        )
+        resolved_encoding = scan_task.other.get(
+            "resolved_encoding"
+        )
+
+        if not isinstance(resolved_geometry, dict):
+            return None
+        if not isinstance(resolved_encoding, dict):
+            return None
+
+        try:
+            center_scanner_m = np.asarray(
+                resolved_geometry["center_scanner_m"],
+                dtype=float,
+            )
+            center_logical_m = np.asarray(
+                resolved_encoding["center_logical_m"],
+                dtype=float,
+            )
+            fov_logical_m = np.asarray(
+                resolved_encoding["fov_logical_m"],
+                dtype=float,
+            )
+            logical_to_scanner = np.asarray(
+                resolved_encoding["logical_to_scanner"],
+                dtype=float,
+            )
+        except KeyError as exc:
+            log.warning(
+                "Resolved geometry is missing "
+                + str(exc)
+                + ". Falling back to legacy simulation."
+            )
+            return None
+
+        return GRE3DSimulationContext(
+            kind="gre3d",
+            center_scanner_m=center_scanner_m,
+            center_logical_m=center_logical_m,
+            fov_logical_m=fov_logical_m,
+            logical_to_scanner=(
+                logical_to_scanner
+            ),
+            base_resolution=(
+                int(self.param_baseresolution)
+            ),
+            n_phase=int(self.param_baseresolution),
+            n_slice=int(self.param_slices),
+            oversampling_read=(
+                scan_task.processing.oversampling_read
+            ),
+        )
+
     def run_sequence(
         self,
         scan_task,
@@ -458,6 +532,24 @@ class SequenceGRE_3D(PulseqSequence, registry_key=Path(__file__).stem):
                 "REAL HARDWARE"
             )
 
+        sim_context = None
+        if hardware_simulation:
+            sim_context = (
+                self.build_simulation_context(
+                    scan_task
+                )
+            )
+            if sim_context is not None:
+                log.info(
+                    "GRE simulation: fixed scanner-space "
+                    "phantom with resolved planning geometry"
+                )
+            else:
+                log.info(
+                    "GRE simulation: no resolved planning "
+                    "geometry; legacy phantom fallback"
+                )
+
         try:
             rxd, rx_t = run_pulseq(
                 seq_file=(
@@ -486,6 +578,7 @@ class SequenceGRE_3D(PulseqSequence, registry_key=Path(__file__).stem):
                 hardware_simulation=(
                     hardware_simulation
                 ),
+                sim_context=sim_context,
             )
 
         except Exception:
