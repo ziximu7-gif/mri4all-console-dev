@@ -1788,18 +1788,32 @@ class ExaminationWindow(QMainWindow):
             log.warning("Unable load scan task for viewers.")
             return
 
+        target_viewer = self.sender().property("target")
+        viewer_number = {
+            "viewer1": 1,
+            "viewer2": 2,
+            "viewer3": 3,
+        }.get(target_viewer)
+
         result_item = None
-        for result in scan_task.results:
-            if result.primary:
-                result_item = result
-                break
+
+        if viewer_number is not None:
+            for result in scan_task.results:
+                if result.autoload_viewer == viewer_number:
+                    result_item = result
+                    break
+
+        if result_item is None:
+            for result in scan_task.results:
+                if result.primary:
+                    result_item = result
+                    break
 
         if not result_item:
             log.warning("Unable load scan task for viewers.")
             return
         result_path = scan_path + "/" + result_item.file_path
 
-        target_viewer = self.sender().property("target")
         if target_viewer == "viewer1":
             self.viewer1.view_data(result_path, result_item.type, scan_task)
         elif target_viewer == "viewer2":
