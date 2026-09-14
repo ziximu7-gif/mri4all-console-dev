@@ -1814,12 +1814,44 @@ class ExaminationWindow(QMainWindow):
             return
         result_path = scan_path + "/" + result_item.file_path
 
+        target_widget = None
         if target_viewer == "viewer1":
-            self.viewer1.view_data(result_path, result_item.type, scan_task)
+            target_widget = self.viewer1
         elif target_viewer == "viewer2":
-            self.viewer2.view_data(result_path, result_item.type, scan_task)
+            target_widget = self.viewer2
         elif target_viewer == "viewer3":
-            self.viewer3.view_data(result_path, result_item.type, scan_task)
+            target_widget = self.viewer3
+
+        if target_widget is not None:
+            if (
+                scan_task.sequence == "localizer"
+                and result_item.type == "dicom"
+            ):
+                self.planning_scan_path = scan_path
+                self.applyPlanningButton.setEnabled(True)
+
+                self.load_planning_state_from_task(scan_task)
+
+                orientation = {
+                    1: "Axial",
+                    2: "Coronal",
+                    3: "Sagittal",
+                }.get(result_item.autoload_viewer)
+
+                target_widget.set_planning_context(
+                    orientation,
+                    self.planning_state,
+                )
+
+            else:
+
+                target_widget.clear_planning_context()
+
+            target_widget.view_data(
+                result_path,
+                result_item.type,
+                scan_task,
+            )
         elif target_viewer == "flex":
             self.flexViewer.view_data(result_path, result_item.type, scan_task)
         else:
