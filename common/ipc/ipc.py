@@ -1,6 +1,7 @@
 import atexit
 import json
 import os
+import stat
 from pathlib import Path
 from time import sleep
 from typing import Any, Dict, Literal, Optional, Union
@@ -96,17 +97,25 @@ class Communicator(QObject, Helper):
     base = "/tmp/mri4all/pipes"
     pipe_end = None
 
-    def __init__(self, pipe_end: PipeEnd):
+    def __init__(self, pipe_end: PipeEnd, *, owns_input_fifo: bool = True):
         in_, out_ = pipe_end.value
         self.pipe_end = pipe_end
+        self.owns_input_fifo = owns_input_fifo
         super().__init__()
         Path(self.base).mkdir(parents=True, exist_ok=True)
 
         self.in_file = str(Path(self.base, in_.value))
         self.out_file = str(Path(self.base, out_.value))
 
-        self.mkfifo(str(self.in_file))
-        atexit.register(self.cleanup)
+        if self.owns_input_fifo:
+            # Owner mode: create/reuse the inbound FIFO and take
+            # responsibility for its lifecycle (cleanup at exit).
+            self.mkfifo(str(self.in_file))
+            atexit.register(self.cleanup)
+        # Non-owning / sender-only mode: paths are computed so this
+        # end can send through out_file, but it must NOT create,
+        # unlink, or otherwise manage the inbound FIFO that belongs
+        # to the legitimate owner of this pipe end.
 
     def is_open(self):
         if not os.path.exists(self.out_file):
@@ -153,11 +162,23 @@ class Communicator(QObject, Helper):
         return CommunicatorEnvelope(**result)
 
     def mkfifo(self, FIFO):
+        """
+        Create the FIFO idempotently.
+
+        An existing valid FIFO is reused as-is. Never
+        unlink/recreate an existing FIFO merely because it
+        exists: multiple processes (UI, ACQ, RECON) may
+        construct communicators concurrently, and
+        unlink/recreate is not atomic across processes.
+        """
         try:
             os.mkfifo(FIFO)
         except FileExistsError:
-            os.unlink(FIFO)
-            os.mkfifo(FIFO)
+            mode = os.stat(FIFO).st_mode
+            if not stat.S_ISFIFO(mode):
+                raise RuntimeError(
+                    f"IPC path exists but is not a FIFO: {FIFO}"
+                )
 
     def _listen(self):
         while True:

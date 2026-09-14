@@ -21,10 +21,6 @@ import common.config as config
 
 log = logger.get_logger()
 
-from common.ipc import Communicator
-
-ipc_comm = Communicator(Communicator.ACQ)
-
 
 class SequenceFID(PulseqSequence, registry_key=Path(__file__).stem):
     # Sequence parameters
@@ -92,7 +88,6 @@ class SequenceFID(PulseqSequence, registry_key=Path(__file__).stem):
 
     def calculate_sequence(self, scan_task) -> bool:
         log.info("Calculating sequence " + self.get_name())
-        ipc_comm.send_status(f"Calculating sequence...")
 
         scan_task.processing.recon_mode = "bypass"
         self.seq_file_path = self.get_working_folder() + "/seq/acq0.seq"
@@ -106,7 +101,6 @@ class SequenceFID(PulseqSequence, registry_key=Path(__file__).stem):
 
     def run_sequence(self, scan_task) -> bool:
         log.info("Running sequence " + self.get_name())
-        ipc_comm.send_status(f"Preparing scan...")
 
         rxd, rx_t = run_pulseq(
             seq_file=self.seq_file_path,

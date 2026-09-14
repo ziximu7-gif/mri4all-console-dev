@@ -20,11 +20,6 @@ import common.config as config
 log = logger.get_logger()
 
 
-from common.ipc import Communicator
-
-ipc_comm = Communicator(Communicator.ACQ)
-
-
 class SequenceTSE_3D(PulseqSequence, registry_key=Path(__file__).stem):
     # Sequence parameters
     param_TE: int = 50
@@ -181,7 +176,6 @@ class SequenceTSE_3D(PulseqSequence, registry_key=Path(__file__).stem):
 
     def calculate_sequence(self, scan_task) -> bool:
         log.info("Calculating sequence " + self.get_name())
-        ipc_comm.send_status(f"Calculating sequence...")
 
         if config.get_config().is_hardware_simulation():
             #scan_task.processing.recon_mode = "bypass"
@@ -234,7 +228,6 @@ class SequenceTSE_3D(PulseqSequence, registry_key=Path(__file__).stem):
 
     def run_sequence(self, scan_task) -> bool:
         log.info("Running sequence " + self.get_name())
-        ipc_comm.send_status(f"Preparing scan...")
 
         expected_duration_sec = int(
             self.param_TR

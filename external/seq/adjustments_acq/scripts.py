@@ -27,7 +27,11 @@ log = logger.get_logger()
 
 from common.ipc import Communicator
 
-ipc_comm = Communicator(Communicator.ACQ)
+# Sender-only: this module sends acquisition data through the ACQ
+# pipe end but does NOT own the lifecycle of the inbound acq_pipe
+# FIFO. The legitimate owner is services/acq/main.py. Importing this
+# module must not create or unlink the service's inbound FIFO.
+ipc_comm = Communicator(Communicator.ACQ, owns_input_fifo=False)
 
 
 def run_pulseq(

@@ -118,9 +118,14 @@ def process_acquisition(scan_name: str) -> bool:
         if not seq_instance.set_parameters(scan_task.parameters, scan_task):
             raise Exception("Invalid protocol used to initialize sequence.")
         current_step = "calculate_sequence"
+        # The acquisition service owns the ACQ IPC endpoint and
+        # reports acquisition status. Sequence modules must not
+        # create service IPC resources.
+        communicator.send_status("Calculating sequence...")
         if not seq_instance.calculate_sequence(scan_task):
             raise Exception("Sequence did not calculate successfully.")
         current_step = "run_sequence"
+        communicator.send_status("Preparing scan...")
         if not seq_instance.run_sequence(scan_task):
             raise Exception("Sequence did not run successfully.")
     except Exception as e:

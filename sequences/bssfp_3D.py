@@ -20,10 +20,6 @@ import common.helper as helper
 
 log = logger.get_logger()
 
-from common.ipc import Communicator
-
-ipc_comm = Communicator(Communicator.ACQ)
-
 
 class SequenceBSSFP_3D(PulseqSequence, registry_key=Path(__file__).stem):
     # Sequence parameters
@@ -173,7 +169,6 @@ class SequenceBSSFP_3D(PulseqSequence, registry_key=Path(__file__).stem):
 
     def calculate_sequence(self, scan_task) -> bool:
         log.info("Calculating sequence " + self.get_name())
-        ipc_comm.send_status(f"Calculating sequence...")
 
         scan_task.processing.recon_mode = "basic3d"
         scan_task.processing.dim = 3
@@ -190,7 +185,6 @@ class SequenceBSSFP_3D(PulseqSequence, registry_key=Path(__file__).stem):
 
     def run_sequence(self, scan_task) -> bool:
         log.info("Running sequence " + self.get_name())
-        ipc_comm.send_status(f"Preparing scan...")
 
         expected_duration_sec = int(
             self.param_TR

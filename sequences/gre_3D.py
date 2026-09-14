@@ -26,9 +26,6 @@ from sequences.common.planning import (
 )
 
 
-from common.ipc import Communicator
-
-ipc_comm = Communicator(Communicator.ACQ)
 log = logger.get_logger()
 
 class SequenceGRE_3D(PulseqSequence, registry_key=Path(__file__).stem):
@@ -184,7 +181,6 @@ class SequenceGRE_3D(PulseqSequence, registry_key=Path(__file__).stem):
 
     def calculate_sequence(self, scan_task) -> bool:
         log.info("Calculating sequence " + self.get_name())
-        ipc_comm.send_status(f"Calculating sequence...")
         (
             planned_geometry,
             planned_encoding,
@@ -434,10 +430,6 @@ class SequenceGRE_3D(PulseqSequence, registry_key=Path(__file__).stem):
         log.info(
             "Running sequence "
             + self.get_name()
-        )
-
-        ipc_comm.send_status(
-            "Preparing scan..."
         )
 
         expected_duration_sec = int(

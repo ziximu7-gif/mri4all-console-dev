@@ -16,7 +16,6 @@ sys.stdout = logger.LoggerStdCapture(log.info)
 sys.stderr = logger.LoggerStdCapture(log.warning)
 
 import common.helper as helper
-from common.ipc import Communicator
 
 from common.version import mri4all_version
 import common.queue as queue
@@ -31,8 +30,6 @@ from services.shim.shim_manager import (
 )
 
 main_loop = None  # type: helper.AsyncTimer # type: ignore
-
-communicator = Communicator(Communicator.ACQ)
 
 
 def move_to_fail(scan_name: str) -> bool:
