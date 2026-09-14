@@ -2211,6 +2211,40 @@ class ViewerWidget(QWidget):
 
         ds = pydicom.dcmread(lstFilesDCM[0])
         ConstPixelDims = (len(lstFilesDCM), int(ds.Rows), int(ds.Columns))
+
+        row_spacing_mm = 1.0
+        column_spacing_mm = 1.0
+
+        try:
+            pixel_spacing = ds.PixelSpacing
+
+            row_spacing_mm = float(
+                pixel_spacing[0]
+            )
+
+            column_spacing_mm = float(
+                pixel_spacing[1]
+            )
+
+            if (
+                not np.isfinite(row_spacing_mm)
+                or not np.isfinite(column_spacing_mm)
+                or row_spacing_mm <= 0
+                or column_spacing_mm <= 0
+            ):
+                raise ValueError(
+                    "Invalid DICOM PixelSpacing"
+                )
+
+        except (
+            AttributeError,
+            IndexError,
+            TypeError,
+            ValueError,
+        ):
+            row_spacing_mm = 1.0
+            column_spacing_mm = 1.0
+
         ArrayDicom = np.zeros(ConstPixelDims, dtype=ds.pixel_array.dtype)
         for filenameDCM in lstFilesDCM:
             ds = pydicom.dcmread(filenameDCM)
@@ -2220,6 +2254,13 @@ class ViewerWidget(QWidget):
 
         self.widget = pg.ImageView()
         self.widget.setImage(ArrayDicom)
+        self.widget.getView().setAspectLocked(
+            True,
+            ratio=(
+                column_spacing_mm
+                / row_spacing_mm
+            ),
+        )
         self.widget.timeLine.setPen(color=(200, 200, 200), width=8)
         self.widget.timeLine.setHoverPen(color=(255, 255, 255), width=8)
 
