@@ -319,33 +319,13 @@ class SequenceGRE_3D(PulseqSequence, registry_key=Path(__file__).stem):
         acquisition or reconstruction.
         """
 
-        tr_s = (
-            float(self.param_TR)
-            / 1000.0
-        )
-
-        # Dummy shots do not contain ADC.
-        # Show the first real acquisition TR.
-        visualization_start = (
-            self.param_dummy_shots
-            * tr_s
-        )
-
-        visualization_end = (
-            visualization_start
-            + tr_s
-        )
-
         output_folder = (
             self.get_working_folder()
             + "/other"
         )
 
         log.info(
-            "Generating GRE sequence "
-            "visualization: "
-            f"{visualization_start:.6f} - "
-            f"{visualization_end:.6f} s"
+            "Generating full GRE sequence visualization"
         )
 
         visualization_result = (
@@ -358,8 +338,8 @@ class SequenceGRE_3D(PulseqSequence, registry_key=Path(__file__).stem):
                 ),
                 prefix="gre3d",
                 time_range=(
-                    visualization_start,
-                    visualization_end,
+                    0,
+                    float("inf"),
                 ),
                 time_disp="ms",
                 plot_type="Gradient",
