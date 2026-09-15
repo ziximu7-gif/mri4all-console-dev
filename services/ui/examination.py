@@ -1581,6 +1581,7 @@ class ExaminationWindow(QMainWindow):
         self.viewer1.view_data("", "empty", {})
         self.viewer2.view_data("", "empty", {})
         self.viewer3.view_data("", "empty", {})
+        self.flexViewerWindow.show_single_view()
         self.flexViewer.view_data("", "empty", {})
     def populate_flex_result_menu(self):
         """
@@ -1645,13 +1646,58 @@ class ExaminationWindow(QMainWindow):
         # Add one menu entry for every ResultItem
         # -------------------------------------------------
 
+        result_paths = {
+            result.file_path
+            for result in scan_task.results
+        }
+
         for result_index, result_item in enumerate(
             scan_task.results
         ):
 
+            if (
+                result_item.type == "plot"
+                and result_item.file_path.endswith(
+                    "_gradients.plot"
+                )
+            ):
+                rf_partner_path = (
+                    result_item.file_path[
+                        :-len("_gradients.plot")
+                    ]
+                    + "_rf_adc.plot"
+                )
+
+                if rf_partner_path in result_paths:
+                    continue
+
             result_name = (
                 result_item.name
             )
+
+            if (
+                result_item.type == "plot"
+                and result_item.file_path.endswith(
+                    "_rf_adc.plot"
+                )
+            ):
+                gradient_partner_path = (
+                    result_item.file_path[
+                        :-len("_rf_adc.plot")
+                    ]
+                    + "_gradients.plot"
+                )
+
+                if (
+                    gradient_partner_path
+                    in result_paths
+                    and result_name.endswith(
+                        " - RF / ADC"
+                    )
+                ):
+                    result_name = result_name[
+                        :-len(" - RF / ADC")
+                    ]
 
             if not result_name:
 
@@ -1684,6 +1730,118 @@ class ExaminationWindow(QMainWindow):
             action.triggered.connect(
                 self.load_specific_result_in_flex_viewer
             )
+
+    def show_result_in_flex_viewer(
+        self,
+        scan_path,
+        scan_task,
+        result_item,
+    ):
+        result_path = (
+            scan_path
+            + "/"
+            + result_item.file_path
+        )
+
+        file_path = (
+            result_item.file_path
+        )
+
+        rf_result = None
+        gradient_result = None
+
+        if (
+            result_item.type == "plot"
+            and file_path.endswith(
+                "_rf_adc.plot"
+            )
+        ):
+            partner_path = (
+                file_path[
+                    :-len(
+                        "_rf_adc.plot"
+                    )
+                ]
+                + "_gradients.plot"
+            )
+
+            rf_result = result_item
+
+            for candidate in (
+                scan_task.results
+            ):
+                if (
+                    candidate.type == "plot"
+                    and candidate.file_path
+                    == partner_path
+                ):
+                    gradient_result = (
+                        candidate
+                    )
+                    break
+
+        elif (
+            result_item.type == "plot"
+            and file_path.endswith(
+                "_gradients.plot"
+            )
+        ):
+            partner_path = (
+                file_path[
+                    :-len(
+                        "_gradients.plot"
+                    )
+                ]
+                + "_rf_adc.plot"
+            )
+
+            gradient_result = (
+                result_item
+            )
+
+            for candidate in (
+                scan_task.results
+            ):
+                if (
+                    candidate.type == "plot"
+                    and candidate.file_path
+                    == partner_path
+                ):
+                    rf_result = candidate
+                    break
+
+        if (
+            rf_result is not None
+            and gradient_result
+            is not None
+        ):
+            rf_path = (
+                scan_path
+                + "/"
+                + rf_result.file_path
+            )
+
+            gradient_path = (
+                scan_path
+                + "/"
+                + gradient_result.file_path
+            )
+
+            self.flexViewerWindow.show_sequence_pair(
+                rf_path,
+                gradient_path,
+                scan_task,
+            )
+
+            return
+
+        self.flexViewerWindow.show_single_view()
+
+        self.flexViewer.view_data(
+            result_path,
+            result_item.type,
+            scan_task,
+        )
 
     def load_specific_result_in_flex_viewer(
         self
@@ -1760,21 +1918,15 @@ class ExaminationWindow(QMainWindow):
             ]
         )
 
-        result_path = (
-            scan_path
-            + "/"
-            + result_item.file_path
-        )
-
         log.info(
             "Loading result in Flex Viewer: "
             + result_item.name
         )
 
-        self.flexViewer.view_data(
-            result_path,
-            result_item.type,
+        self.show_result_in_flex_viewer(
+            scan_path,
             scan_task,
+            result_item,
         )
 
     def load_result_in_viewer(self):
@@ -1873,7 +2025,11 @@ class ExaminationWindow(QMainWindow):
                 scan_task,
             )
         elif target_viewer == "flex":
-            self.flexViewer.view_data(result_path, result_item.type, scan_task)
+            self.show_result_in_flex_viewer(
+                scan_path,
+                scan_task,
+                result_item,
+            )
         else:
             log.error("Invalid target viewer selected")
 
@@ -2018,7 +2174,11 @@ class ExaminationWindow(QMainWindow):
                     scan_task,
                 )
             elif result_item.autoload_viewer == 4:
-                self.flexViewer.view_data(result_path, result_item.type, scan_task)
+                self.show_result_in_flex_viewer(
+                    scan_path,
+                    scan_task,
+                    result_item,
+                )
             elif result_item.autoload_viewer == 0:
                 continue
             else:

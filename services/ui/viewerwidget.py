@@ -65,6 +65,10 @@ class StaticTextItem(pg.TextItem):
 class ViewerWidget(QWidget):
 
     planning_changed = pyqtSignal()
+    plot_xlim_changed = pyqtSignal(
+        float,
+        float,
+    )
     # layout: QBoxLayout
     widget: Optional[QWidget] = None
     viewed_scan_task: Optional[ScanTask] = None
@@ -117,6 +121,8 @@ class ViewerWidget(QWidget):
         # for every sigRegionChanged event.
         self._planning_interactions = {}
 
+        self._updating_plot_xlim = False
+
         self.set_empty_viewer()
 
         # def __del__(self):
@@ -159,6 +165,99 @@ class ViewerWidget(QWidget):
             self.set_empty_viewer()
             self.viewer_mode = "empty"
             return False
+
+    def get_plot_figure(self):
+        if self.viewer_mode != "plot":
+            return None
+
+        if self.widget is None:
+            return None
+
+        layout = self.widget.layout()
+
+        if (
+            layout is None
+            or layout.count() == 0
+        ):
+            return None
+
+        canvas = (
+            layout.itemAt(0).widget()
+        )
+
+        if canvas is None:
+            return None
+
+        return getattr(
+            canvas,
+            "figure",
+            None,
+        )
+
+    def set_plot_xlim(
+        self,
+        xmin,
+        xmax,
+    ):
+        fig = self.get_plot_figure()
+
+        if fig is None:
+            return
+
+        if self._updating_plot_xlim:
+            return
+
+        self._updating_plot_xlim = True
+
+        try:
+            for ax in fig.get_axes():
+                ax.set_xlim(
+                    xmin,
+                    xmax,
+                )
+
+            fig.canvas.draw_idle()
+
+        finally:
+            self._updating_plot_xlim = False
+
+    def _plot_xlim_changed(
+        self,
+        changed_axis,
+    ):
+        if self._updating_plot_xlim:
+            return
+
+        xmin, xmax = (
+            changed_axis.get_xlim()
+        )
+
+        self._updating_plot_xlim = True
+
+        try:
+            fig = self.get_plot_figure()
+
+            if fig is None:
+                return
+
+            for ax in fig.get_axes():
+                if ax is changed_axis:
+                    continue
+
+                ax.set_xlim(
+                    xmin,
+                    xmax,
+                )
+
+            fig.canvas.draw_idle()
+
+        finally:
+            self._updating_plot_xlim = False
+
+        self.plot_xlim_changed.emit(
+            float(xmin),
+            float(xmax),
+        )
 
     def set_planning_context(
         self,
@@ -2348,6 +2447,12 @@ class ViewerWidget(QWidget):
         curr_ax = []
 
         axis = fig.get_axes()
+
+        for ax in axis:
+            ax.callbacks.connect(
+                "xlim_changed",
+                self._plot_xlim_changed,
+            )
 
         self.textvar = None
 

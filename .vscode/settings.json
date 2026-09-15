@@ -2,5 +2,11 @@
     "[python]": {
         "editor.defaultFormatter": "ms-python.black-formatter"
     },
-    "python.formatting.provider": "none"
+    "python.formatting.provider": "none",
+    "chat.tools.terminal.autoApprove": {
+        "/^python -m py_compile services/ui/flexviewer\\.py && git diff -- services/ui/flexviewer\\.py$/": {
+            "approve": true,
+            "matchCommandLine": true
+        }
+    }
 }
