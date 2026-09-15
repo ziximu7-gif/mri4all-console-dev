@@ -162,8 +162,11 @@ def run_reconstruction_basic3d(folder: str, task: ScanTask) -> bool:
     native_views = [
         {
             "name": "FOV Native - Read / Phase",
-            "volume": fft,
-            "logical_axis_order": (0, 1, 2),
+            "volume": np.transpose(
+                fft,
+                (1, 0, 2),
+            ),
+            "logical_axis_order": (1, 0, 2),
             "series_offset": 0,
             "autoload_viewer": 1,
             "primary": True,
@@ -172,9 +175,9 @@ def run_reconstruction_basic3d(folder: str, task: ScanTask) -> bool:
             "name": "FOV Native - Read / Third",
             "volume": np.transpose(
                 fft,
-                (0, 2, 1),
+                (2, 0, 1),
             ),
-            "logical_axis_order": (0, 2, 1),
+            "logical_axis_order": (2, 0, 1),
             "series_offset": 1,
             "autoload_viewer": 2,
             "primary": False,
@@ -183,9 +186,9 @@ def run_reconstruction_basic3d(folder: str, task: ScanTask) -> bool:
             "name": "FOV Native - Phase / Third",
             "volume": np.transpose(
                 fft,
-                (1, 2, 0),
+                (2, 1, 0),
             ),
-            "logical_axis_order": (1, 2, 0),
+            "logical_axis_order": (2, 1, 0),
             "series_offset": 2,
             "autoload_viewer": 3,
             "primary": False,

@@ -1838,6 +1838,8 @@ class ExaminationWindow(QMainWindow):
                     3: "Sagittal",
                 }.get(result_item.autoload_viewer)
 
+                target_widget.clear_reconstruction_overlay_context()
+
                 target_widget.set_planning_context(
                     orientation,
                     self.planning_state,
@@ -1846,6 +1848,24 @@ class ExaminationWindow(QMainWindow):
             else:
 
                 target_widget.clear_planning_context()
+
+                if (
+                    scan_task.processing.recon_mode
+                    == "basic3d"
+                    and result_item.type == "dicom"
+                ):
+
+                    target_widget.set_reconstruction_overlay_context(
+                        {
+                            1: (1, 0, 2),
+                            2: (2, 0, 1),
+                            3: (2, 1, 0),
+                        }[viewer_number]
+                    )
+
+                else:
+
+                    target_widget.clear_reconstruction_overlay_context()
 
             target_widget.view_data(
                 result_path,
@@ -1889,6 +1909,8 @@ class ExaminationWindow(QMainWindow):
                     == "dicom"
                 ):
 
+                    self.viewer1.clear_reconstruction_overlay_context()
+
                     self.viewer1.set_planning_context(
                         "Axial",
                         self.planning_state,
@@ -1897,6 +1919,20 @@ class ExaminationWindow(QMainWindow):
                 else:
 
                     self.viewer1.clear_planning_context()
+
+                    if (
+                        scan_task.processing.recon_mode
+                        == "basic3d"
+                        and result_item.type == "dicom"
+                    ):
+
+                        self.viewer1.set_reconstruction_overlay_context(
+                            (1, 0, 2)
+                        )
+
+                    else:
+
+                        self.viewer1.clear_reconstruction_overlay_context()
 
                 self.viewer1.view_data(
                     result_path,
@@ -1912,6 +1948,8 @@ class ExaminationWindow(QMainWindow):
                     == "dicom"
                 ):
 
+                    self.viewer2.clear_reconstruction_overlay_context()
+
                     self.viewer2.set_planning_context(
                         "Coronal",
                         self.planning_state,
@@ -1920,6 +1958,20 @@ class ExaminationWindow(QMainWindow):
                 else:
 
                     self.viewer2.clear_planning_context()
+
+                    if (
+                        scan_task.processing.recon_mode
+                        == "basic3d"
+                        and result_item.type == "dicom"
+                    ):
+
+                        self.viewer2.set_reconstruction_overlay_context(
+                            (2, 0, 1)
+                        )
+
+                    else:
+
+                        self.viewer2.clear_reconstruction_overlay_context()
 
                 self.viewer2.view_data(
                     result_path,
@@ -1935,6 +1987,8 @@ class ExaminationWindow(QMainWindow):
                     == "dicom"
                 ):
 
+                    self.viewer3.clear_reconstruction_overlay_context()
+
                     self.viewer3.set_planning_context(
                         "Sagittal",
                         self.planning_state,
@@ -1943,6 +1997,20 @@ class ExaminationWindow(QMainWindow):
                 else:
 
                     self.viewer3.clear_planning_context()
+
+                    if (
+                        scan_task.processing.recon_mode
+                        == "basic3d"
+                        and result_item.type == "dicom"
+                    ):
+
+                        self.viewer3.set_reconstruction_overlay_context(
+                            (2, 1, 0)
+                        )
+
+                    else:
+
+                        self.viewer3.clear_reconstruction_overlay_context()
 
                 self.viewer3.view_data(
                     result_path,
