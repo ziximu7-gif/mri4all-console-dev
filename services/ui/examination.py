@@ -986,6 +986,32 @@ class ExaminationWindow(QMainWindow):
             sequence_ui_container
         )
 
+        # -------------------------------------------------
+        # Transient slab center-plane display context
+        # -------------------------------------------------
+        #
+        # Only a 3D GRE protocol has a slab whose center
+        # plane is meaningful to show on the Localizer
+        # viewers. This is display-only state.
+        if scan_task.sequence == "gre_3D":
+            orientation_combo = (
+                sequence_ui_container
+                .Orientation_ComboBox
+            )
+
+            self._set_planning_target_orientation(
+                orientation_combo.currentText()
+            )
+
+            orientation_combo.currentTextChanged.connect(
+                self._set_planning_target_orientation
+            )
+
+        else:
+            self._set_planning_target_orientation(
+                None
+            )
+
         # Configure UI for editing
         for i in range(self.scanParametersWidget.count()):
             self.scanParametersWidget.widget(i).setEnabled(read_only == False)
@@ -1067,6 +1093,13 @@ class ExaminationWindow(QMainWindow):
         self.scanParametersWidget.setCurrentIndex(0)
         self.scanParametersWidget.setEnabled(False)
         self.sequenceResolutionLabel.setVisible(False)
+
+        # Leaving the editor must never leave a stale
+        # slab center-plane reference line behind.
+        # This path covers both save and cancel.
+        self._set_planning_target_orientation(
+            None
+        )
 
         # Delete the sequence instance created for the editor
         if ui_runtime.editor_sequence_instance is not None:
@@ -1406,6 +1439,27 @@ class ExaminationWindow(QMainWindow):
                 self.planning_state.as_dict()
             )
         )
+
+    def _set_planning_target_orientation(
+        self,
+        orientation,
+    ):
+        """
+        Own the transient target-sequence display context
+        for the three Localizer viewers.
+
+        This value is display-only. It is never stored in
+        PlanningState and never persisted with a ScanTask.
+        """
+
+        for viewer in (
+            self.viewer1,
+            self.viewer2,
+            self.viewer3,
+        ):
+            viewer.set_planning_target_orientation(
+                orientation
+            )
 
     def refresh_planning_boxes(self):
         """
