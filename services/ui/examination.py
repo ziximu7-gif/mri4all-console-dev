@@ -32,6 +32,7 @@ import services.ui.protocolbrowser as protocolbrowser
 import services.ui.flexviewer as flexviewer
 from sequences import SequenceBase
 from services.ui.viewerwidget import MplCanvas, ViewerWidget
+from services.ui.planning3dwidget import Planning3DWidget
 from services.ui.spatialbox import PlanningState
 from services.ui.custommessagebox import CustomMessageBox  # type: ignore
 import services.ui.control as control
@@ -76,6 +77,9 @@ class ExaminationWindow(QMainWindow):
     viewer1 = None
     viewer2 = None
     viewer3 = None
+    # Fourth slot is NOT a ViewerWidget: it is the scanner-space
+    # 3D planning view and therefore has its own widget type.
+    planning3d = None
     flexViewer = None
 
     scanner_status_message = ""
@@ -289,10 +293,11 @@ class ExaminationWindow(QMainWindow):
             """
         )
 
-        viewer_styles = "QFrame:hover#viewer1Frame, QFrame:hover#viewer2Frame, QFrame:hover#viewer3Frame { border: 1px solid #E0A526; }"
+        viewer_styles = "QFrame:hover#viewer1Frame, QFrame:hover#viewer2Frame, QFrame:hover#viewer3Frame, QFrame:hover#viewer4Frame { border: 1px solid #E0A526; }"
         self.viewer1Frame.setStyleSheet(viewer_styles)
         self.viewer2Frame.setStyleSheet(viewer_styles)
         self.viewer3Frame.setStyleSheet(viewer_styles)
+        self.viewer4Frame.setStyleSheet(viewer_styles)
 
         viewer1Layout = QHBoxLayout(self.viewer1Frame)
         viewer1Layout.setContentsMargins(0, 0, 0, 0)
@@ -314,6 +319,21 @@ class ExaminationWindow(QMainWindow):
         self.viewer3.setProperty("id", "3")
         viewer3Layout.addWidget(self.viewer3)
         self.viewer3Frame.setLayout(viewer3Layout)
+
+        # -----------------------------------------------------
+        # Fourth slot: scanner-space 3D planning view.
+        #
+        # This is intentionally NOT a ViewerWidget: the 2D
+        # viewers own DICOM/image coordinates while this slot
+        # owns scanner XYZ. It is read-only for now and not
+        # yet connected to planning_changed / PlanningState.
+        # -----------------------------------------------------
+
+        viewer4Layout = QHBoxLayout(self.viewer4Frame)
+        viewer4Layout.setContentsMargins(0, 0, 0, 0)
+        self.planning3d = Planning3DWidget()
+        viewer4Layout.addWidget(self.planning3d)
+        self.viewer4Frame.setLayout(viewer4Layout)
 
         # -----------------------------------------------------
         # Tri-planar planning synchronization
@@ -1441,18 +1461,23 @@ class ExaminationWindow(QMainWindow):
         self.viewer1Frame.setVisible(True)
         self.viewer2Frame.setVisible(False)
         self.viewer3Frame.setVisible(False)
+        self.viewer4Frame.setVisible(False)
         QTimer.singleShot(1, self.triggerViewerLayoutUpdate)
 
     def set2Viewers(self):
         self.viewer1Frame.setVisible(True)
         self.viewer2Frame.setVisible(True)
         self.viewer3Frame.setVisible(False)
+        self.viewer4Frame.setVisible(False)
         QTimer.singleShot(1, self.triggerViewerLayoutUpdate)
 
     def set3Viewers(self):
         self.viewer1Frame.setVisible(True)
         self.viewer2Frame.setVisible(True)
         self.viewer3Frame.setVisible(True)
+        # Localizer planning is tri-planar + one scanner-space
+        # 3D view, so the fourth slot is part of this mode.
+        self.viewer4Frame.setVisible(True)
         QTimer.singleShot(1, self.triggerViewerLayoutUpdate)
 
     def triggerViewerLayoutUpdate(self):
