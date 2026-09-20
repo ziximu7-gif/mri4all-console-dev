@@ -24,7 +24,6 @@ from common.types import ResultTypes, ScanTask, TimeSeriesResult
 from services.ui.spatialbox import PlanningState
 from common.geometry import (
     orientation_plane_axes,
-    orientation_encoding_matrix,
     planning_euler_to_matrix,
     planning_matrix_to_euler,
     planning_box_corners_in_encoding_m,
@@ -123,16 +122,6 @@ class ViewerWidget(QWidget):
 
         self.fov_basis_items = []
 
-        # Orientation of the target 3D GRE protocol
-        # whose slab is being planned. This is owned by
-        # ExaminationWindow and is not part of
-        # PlanningState or Box3D.
-        self.planning_target_orientation = None
-
-        # Yellow slab center-plane line shown inside
-        # the FOV rectangle.
-        self.fov_center_line = None
-
         self.fov_roi = None
         self.shim_roi = None
         self.fov_label = None
@@ -169,7 +158,6 @@ class ViewerWidget(QWidget):
             sip.delete(widget_to_delete)
             self.widget = None
             self.viewed_scan_task = None
-        self.fov_center_line = None
         self.fov_roi = None
         self.shim_roi = None
         self.fov_label = None
@@ -314,324 +302,6 @@ class ViewerWidget(QWidget):
 
         self.planning_orientation = orientation
         self.planning_state = planning_state
-
-    def set_planning_target_orientation(
-        self,
-        orientation,
-    ):
-        """
-        Tell this viewer which 3D GRE orientation is
-        currently being planned.
-
-        orientation must be one of
-        "Axial" / "Coronal" / "Sagittal" / None.
-        Anything else is stored as None.
-        """
-
-        if orientation in (
-            "Axial",
-            "Coronal",
-            "Sagittal",
-        ):
-            self.planning_target_orientation = (
-                orientation
-            )
-        else:
-            self.planning_target_orientation = None
-
-        # The old GRE slab-center line is no longer part of
-        # the v0 FOV display semantics.
-        self._clear_fov_center_line()
-
-    def _planning_plane_projection_and_normal(
-        self,
-    ):
-        """
-        Return (plane_projection, viewer_normal) for
-        the Localizer plane displayed by this viewer.
-
-        plane_projection projects scanner X/Y/Z
-        vectors onto the two visible viewer axes.
-
-        viewer_normal is the scanner-space normal of
-        the displayed viewer plane.
-
-        Both come from the explicit scanner-space
-        ImagePlaneGeometry of the loaded Localizer
-        image rather than from a hard-coded table.
-        """
-
-        if (
-            self.planning_image_plane
-            is None
-        ):
-            return None, None
-
-        plane_projection = np.vstack(
-            [
-                self.planning_image_plane
-                .horizontal_scanner,
-                self.planning_image_plane
-                .vertical_scanner,
-            ]
-        )
-
-        viewer_normal = (
-            self.planning_image_plane
-            .normal_scanner
-        )
-
-        return (
-            plane_projection,
-            viewer_normal,
-        )
-
-    def _clear_fov_center_line(self):
-        if (
-            isinstance(
-                self.widget,
-                pg.ImageView,
-            )
-            and self.fov_center_line is not None
-        ):
-            try:
-                self.widget.getView().removeItem(
-                    self.fov_center_line
-                )
-            except Exception:
-                pass
-
-        self.fov_center_line = None
-
-    def _update_fov_center_line(self):
-        """
-        Draw the intersection of the target GRE slab
-        center plane with this Localizer plane.
-
-        The line is clipped to the currently displayed
-        FOV rectangle. It is display-only: it is not
-        movable and does not emit planning_changed.
-        """
-
-        self._clear_fov_center_line()
-
-        if (
-            self.planning_target_orientation
-            is None
-        ):
-            return
-
-        if self.planning_state is None:
-            return
-
-        if self.planning_orientation is None:
-            return
-
-        if self.fov_roi is None:
-            return
-
-        if not isinstance(
-            self.widget,
-            pg.ImageView,
-        ):
-            return
-
-        box = self.planning_state.fov_box
-
-        # box-local -> scanner
-        rotation = planning_euler_to_matrix(
-            box.rotation_x,
-            box.rotation_y,
-            box.rotation_z,
-        )
-
-        # Third column is the GRE logical
-        # Third / Partition direction.
-        encoding_matrix = (
-            orientation_encoding_matrix(
-                self.planning_target_orientation
-            )
-        )
-
-        # physical (box-local) -> scanner
-        slab_normal_scanner = (
-            rotation
-            @ encoding_matrix[:, 2]
-        )
-
-        (
-            plane_projection,
-            viewer_normal,
-        ) = self._planning_plane_projection_and_normal()
-
-        if (
-            plane_projection is None
-            or viewer_normal is None
-        ):
-            return
-
-        # Intersection direction of the viewer
-        # plane and the slab center plane.
-        intersection_direction = np.cross(
-            viewer_normal,
-            slab_normal_scanner,
-        )
-
-        if (
-            float(
-                np.linalg.norm(
-                    intersection_direction
-                )
-            )
-            < 1e-6
-        ):
-            # Face-on / parallel-plane case.
-            return
-
-        direction_2d = (
-            plane_projection
-            @ intersection_direction
-        )
-
-        direction_2d_norm = float(
-            np.linalg.norm(direction_2d)
-        )
-
-        if direction_2d_norm < 1e-6:
-            return
-
-        direction_2d = (
-            direction_2d
-            / direction_2d_norm
-        )
-
-        # -------------------------------------------------
-        # Clip the line to the displayed FOV rectangle
-        # -------------------------------------------------
-
-        roi_size = self.fov_roi.size()
-
-        roi_width = float(roi_size.x())
-        roi_height = float(roi_size.y())
-
-        if (
-            roi_width <= 0.0
-            or roi_height <= 0.0
-        ):
-            return
-
-        local_center = QPointF(
-            roi_width / 2.0,
-            roi_height / 2.0,
-        )
-
-        parent_center = (
-            self.fov_roi.mapToParent(
-                local_center
-            )
-        )
-
-        parent_probe = QPointF(
-            float(parent_center.x())
-            + float(direction_2d[0]),
-            float(parent_center.y())
-            + float(direction_2d[1]),
-        )
-
-        local_probe = (
-            self.fov_roi.mapFromParent(
-                parent_probe
-            )
-        )
-
-        local_dx = (
-            float(local_probe.x())
-            - roi_width / 2.0
-        )
-
-        local_dy = (
-            float(local_probe.y())
-            - roi_height / 2.0
-        )
-
-        local_norm = float(
-            np.hypot(
-                local_dx,
-                local_dy,
-            )
-        )
-
-        if local_norm < 1e-9:
-            return
-
-        local_dx = local_dx / local_norm
-        local_dy = local_dy / local_norm
-
-        # Distance a centered line can travel before
-        # hitting the rectangle boundary.
-        limits = []
-
-        if abs(local_dx) > 1e-9:
-            limits.append(
-                (roi_width / 2.0)
-                / abs(local_dx)
-            )
-
-        if abs(local_dy) > 1e-9:
-            limits.append(
-                (roi_height / 2.0)
-                / abs(local_dy)
-            )
-
-        if not limits:
-            return
-
-        half_length = min(limits)
-
-        local_start = QPointF(
-            roi_width / 2.0
-            - half_length * local_dx,
-            roi_height / 2.0
-            - half_length * local_dy,
-        )
-
-        local_end = QPointF(
-            roi_width / 2.0
-            + half_length * local_dx,
-            roi_height / 2.0
-            + half_length * local_dy,
-        )
-
-        parent_start = (
-            self.fov_roi.mapToParent(
-                local_start
-            )
-        )
-
-        parent_end = (
-            self.fov_roi.mapToParent(
-                local_end
-            )
-        )
-
-        self.fov_center_line = pg.PlotDataItem(
-            [
-                float(parent_start.x()),
-                float(parent_end.x()),
-            ],
-            [
-                float(parent_start.y()),
-                float(parent_end.y()),
-            ],
-            pen=pg.mkPen(
-                "y",
-                width=2,
-            ),
-        )
-
-        self.widget.getView().addItem(
-            self.fov_center_line
-        )
 
     def _clear_fov_geometry_overlay(
         self,
@@ -2234,8 +1904,6 @@ class ViewerWidget(QWidget):
 
         self._update_fov_basis_indicator()
 
-        self._clear_fov_center_line()
-
         self._update_fov_geometry_overlay()
 
     def _update_planning_labels(self):
@@ -2864,7 +2532,6 @@ class ViewerWidget(QWidget):
             )
 
     def clear_planning_context(self):
-        self._clear_fov_center_line()
         self._clear_fov_geometry_overlay()
 
         self.planning_orientation = None
