@@ -8,6 +8,7 @@ from sequences.common import view_traj
 import common.logger as logger
 from common.geometry import (
     cm_to_m,
+    mm_to_m,
     orientation_channels,
 )
 
@@ -43,6 +44,26 @@ def pypulseq_se2D(
     fov = cm_to_m(
         inputs["FOV"]
     )
+    slice_thickness_mm = inputs.get(
+        "Slice_Thickness"
+    )
+
+    slice_selective = (
+        slice_thickness_mm is not None
+    )
+
+    if slice_selective:
+        slice_thickness = mm_to_m(
+            float(slice_thickness_mm)
+        )
+
+        if slice_thickness <= 0:
+            raise ValueError(
+                "Slice thickness must be positive"
+            )
+    else:
+        slice_thickness = None
+
     Nx = inputs["Base_Resolution"]
     BW = inputs["BW"]
     visualize = inputs["view_traj"]
@@ -96,14 +117,52 @@ def pypulseq_se2D(
     # ======
     # CREATE EVENTS
     # ======
-    # Create non-selective RF pulses for excitation and refocusing
-    rf1 = pp.make_block_pulse(
-        flip_angle=alpha1 * math.pi / 180,
-        duration=alpha1_duration,
-        delay=100e-6,
-        system=system,
-        use="excitation",
-    )
+    # Create excitation and refocusing RF pulses.
+    # Localizer can use slice-selective excitation,
+    # while the legacy path remains non-selective.
+    if slice_selective:
+        rf1, g_slice, g_slice_rephase = (
+            pp.make_sinc_pulse(
+                flip_angle=(
+                    alpha1
+                    * math.pi
+                    / 180
+                ),
+                duration=2e-3,
+                slice_thickness=(
+                    slice_thickness
+                ),
+                apodization=0.5,
+                time_bw_product=4,
+                return_gz=True,
+                system=system,
+                use="excitation",
+            )
+        )
+
+        # make_sinc_pulse() creates its
+        # slice gradients on z internally.
+        # Localizer slice selection must use
+        # the orientation's third channel.
+        g_slice.channel = ch2
+        g_slice_rephase.channel = ch2
+
+    else:
+        rf1 = pp.make_block_pulse(
+            flip_angle=(
+                alpha1
+                * math.pi
+                / 180
+            ),
+            duration=alpha1_duration,
+            delay=100e-6,
+            system=system,
+            use="excitation",
+        )
+
+        g_slice = None
+        g_slice_rephase = None
+
     rf2 = pp.make_block_pulse(
         flip_angle=alpha2 * math.pi / 180,
         duration=alpha2_duration,
@@ -133,38 +192,155 @@ def pypulseq_se2D(
     # ======
     # CALCULATE DELAYS
     # ======
-    tau1 = (
-        math.ceil(
-            (
-                TE / 2
-                - 0.5 * (pp.calc_duration(rf1) + pp.calc_duration(rf2))
-                - pp.calc_duration(gx_pre)
-            )
-            / seq.grad_raster_time
-        )
-    ) * seq.grad_raster_time
+    if slice_selective:
+        raster = seq.grad_raster_time
 
-    tau2 = (
-        math.ceil(
-            (TE / 2 - 0.5 * (pp.calc_duration(rf2)) - pp.calc_duration(gx_pre))
-            / seq.grad_raster_time
-        )
-    ) * seq.grad_raster_time
-
-    delay_TR = (
-        math.ceil(
-            (
-                TR
-                - TE
-                - pp.calc_duration(gx_pre)
-                - np.max(pp.calc_duration(gx_spoil, gx_pre))
+        def ceil_to_raster(value):
+            return (
+                math.ceil(
+                    value / raster
+                )
+                * raster
             )
-            / seq.grad_raster_time
+
+        excitation_block_duration = (
+            pp.calc_duration(
+                rf1,
+                g_slice,
+            )
         )
-    ) * seq.grad_raster_time
-    assert np.all(tau1 >= 0)
-    assert np.all(tau2 >= 0)
-    assert np.all(delay_TR >= pp.calc_duration(gx_spoil))
+
+        excitation_rf_center = (
+            rf1.delay
+            + pp.calc_rf_center(rf1)[0]
+        )
+
+        prephase_block_duration = (
+            pp.calc_duration(
+                gx_pre,
+                g_slice_rephase,
+            )
+        )
+
+        refocusing_block_duration = (
+            pp.calc_duration(rf2)
+        )
+
+        refocusing_rf_center = (
+            rf2.delay
+            + pp.calc_rf_center(rf2)[0]
+        )
+
+        # make_adc() only defines `duration` when `dwell`
+        # is passed; this sequence passes `duration`, so use
+        # the equivalent sampling window num_samples * dwell.
+        echo_center_in_readout = (
+            adc.delay
+            + 0.5
+            * adc.num_samples
+            * adc.dwell
+        )
+
+        tau1_raw = (
+            TE / 2.0
+            - (
+                excitation_block_duration
+                - excitation_rf_center
+            )
+            - prephase_block_duration
+            - refocusing_rf_center
+        )
+
+        tau2_raw = (
+            TE / 2.0
+            - (
+                refocusing_block_duration
+                - refocusing_rf_center
+            )
+            - echo_center_in_readout
+        )
+
+        if tau1_raw < 0 or tau2_raw < 0:
+            raise ValueError(
+                "TE is too short for "
+                "slice-selective Localizer"
+            )
+
+        tau1 = ceil_to_raster(
+            tau1_raw
+        )
+
+        tau2 = ceil_to_raster(
+            tau2_raw
+        )
+
+        post_block_duration = max(
+            pp.calc_duration(gx_spoil),
+            pp.calc_duration(gx_pre),
+        )
+
+        readout_block_duration = (
+            pp.calc_duration(
+                gx,
+                adc,
+            )
+        )
+
+        used_tr = (
+            excitation_block_duration
+            + prephase_block_duration
+            + tau1
+            + refocusing_block_duration
+            + tau2
+            + readout_block_duration
+            + post_block_duration
+        )
+
+        delay_TR_raw = TR - used_tr
+
+        if delay_TR_raw < 0:
+            raise ValueError(
+                "TR is too short for "
+                "slice-selective Localizer"
+            )
+
+        delay_TR = ceil_to_raster(
+            delay_TR_raw
+        )
+
+    else:
+        tau1 = (
+            math.ceil(
+                (
+                    TE / 2
+                    - 0.5 * (pp.calc_duration(rf1) + pp.calc_duration(rf2))
+                    - pp.calc_duration(gx_pre)
+                )
+                / seq.grad_raster_time
+            )
+        ) * seq.grad_raster_time
+
+        tau2 = (
+            math.ceil(
+                (TE / 2 - 0.5 * (pp.calc_duration(rf2)) - pp.calc_duration(gx_pre))
+                / seq.grad_raster_time
+            )
+        ) * seq.grad_raster_time
+
+        delay_TR = (
+            math.ceil(
+                (
+                    TR
+                    - TE
+                    - pp.calc_duration(gx_pre)
+                    - np.max(pp.calc_duration(gx_spoil, gx_pre))
+                )
+                / seq.grad_raster_time
+            )
+        ) * seq.grad_raster_time
+        assert np.all(tau1 >= 0)
+        assert np.all(tau2 >= 0)
+        assert np.all(delay_TR >= pp.calc_duration(gx_spoil))
 
     # ======
     # CONSTRUCT SEQUENCE
@@ -176,14 +352,32 @@ def pypulseq_se2D(
             # adc.phase_offset = rf_phase / 180 * np.pi
             # rf_inc = divmod(rf_inc + rf_spoiling_inc, 360.0)[1]
             # rf_phase = divmod(rf_phase + rf_inc, 360.0)[1]
-            seq.add_block(rf1)
+            if slice_selective:
+                seq.add_block(
+                    rf1,
+                    g_slice,
+                )
+            else:
+                seq.add_block(
+                    rf1
+                )
             gy_pre = pp.make_trapezoid(
                 channel=ch1,
                 area=phase_areas[i],
                 duration=pp.calc_duration(gx_pre),
                 system=system,
             )
-            seq.add_block(gx_pre, gy_pre)
+            if slice_selective:
+                seq.add_block(
+                    gx_pre,
+                    gy_pre,
+                    g_slice_rephase,
+                )
+            else:
+                seq.add_block(
+                    gx_pre,
+                    gy_pre,
+                )
             seq.add_block(pp.make_delay(tau1))
             seq.add_block(rf2)
             seq.add_block(pp.make_delay(tau2))

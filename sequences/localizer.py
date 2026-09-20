@@ -35,6 +35,7 @@ class SequenceSE_2D(PulseqSequence, registry_key=Path(__file__).stem):
     param_TR: int = 3000
     param_NSA: int = 1
     param_FOV: int = 20
+    param_Slice_Thickness: float = 10.0
     param_Orientation: str = "Axial"
     param_Base_Resolution: int = 96
     param_BW: int = 32000
@@ -64,6 +65,7 @@ class SequenceSE_2D(PulseqSequence, registry_key=Path(__file__).stem):
             "TR": self.param_TR,
             "NSA": self.param_NSA,
             "FOV": self.param_FOV,
+            "Slice_Thickness": self.param_Slice_Thickness,
             "Orientation": self.param_Orientation,
             "Base_Resolution": self.param_Base_Resolution,
             "BW": self.param_BW,
@@ -80,6 +82,7 @@ class SequenceSE_2D(PulseqSequence, registry_key=Path(__file__).stem):
             "TR": 3000,
             "NSA": 1,
             "FOV": 20,
+            "Slice_Thickness": 10.0,
             "Orientation": "Axial",
             "Base_Resolution": 96,
             "BW": 32000,
@@ -96,6 +99,9 @@ class SequenceSE_2D(PulseqSequence, registry_key=Path(__file__).stem):
             self.param_TR = parameters["TR"]
             self.param_NSA = parameters["NSA"]
             self.param_FOV = parameters["FOV"]
+            self.param_Slice_Thickness = float(
+                parameters.get("Slice_Thickness", 10.0)
+            )
             self.param_Orientation = "Axial"
 
             self.param_Base_Resolution = parameters["Base_Resolution"]
@@ -143,6 +149,10 @@ class SequenceSE_2D(PulseqSequence, registry_key=Path(__file__).stem):
     def validate_parameters(self, scan_task) -> bool:
         if self.param_TE > self.param_TR:
             self.problem_list.append("TE cannot be longer than TR")
+        if self.param_Slice_Thickness <= 0:
+            self.problem_list.append(
+                "Slice thickness must be positive"
+            )
         return self.is_valid()
 
     def calculate_sequence(self, scan_task) -> bool:
@@ -172,6 +182,7 @@ class SequenceSE_2D(PulseqSequence, registry_key=Path(__file__).stem):
                     "TR": self.param_TR,
                     "NSA": self.param_NSA,
                     "FOV": self.param_FOV,
+                    "Slice_Thickness": self.param_Slice_Thickness,
                     "Orientation": orientation,
                     "Base_Resolution": self.param_Base_Resolution,
                     "BW": self.param_BW,
