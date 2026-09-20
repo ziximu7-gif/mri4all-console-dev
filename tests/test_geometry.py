@@ -13,6 +13,9 @@ from common.geometry import (
     planning_box_to_scan_geometry,
     planning_euler_to_matrix,
     resolve_encoding_geometry,
+    intersect_box_with_plane_scanner_m,
+    project_box_edges_to_plane_scanner_m,
+    scan_geometry_box_corners_scanner_m,
 )
 from common.geometry import (
     planning_euler_to_matrix,
@@ -618,7 +621,7 @@ def test_image_plane_basis_scanner_columns():
         basis[:, 2],
         plane.normal_scanner,
     )
-    
+
 def test_image_plane_rejects_non_finite_size():
     with pytest.raises(ValueError):
         ImagePlaneGeometry(
@@ -633,3 +636,325 @@ def test_image_plane_rejects_non_finite_size():
                 height_m=np.inf
             )
         )
+
+# =====================================================================
+# Box / image-plane intersection and projection
+# =====================================================================
+
+
+def _sorted_scanner_points(points):
+    """
+    Deterministic point ordering for comparisons where polygon
+    start vertex / winding is irrelevant.
+    """
+
+    points = np.asarray(
+        points,
+        dtype=float,
+    )
+
+    if len(points) == 0:
+        return points
+
+    order = np.lexsort(
+        (
+            points[:, 2],
+            points[:, 1],
+            points[:, 0],
+        )
+    )
+
+    return points[order]
+
+
+def test_scan_geometry_box_corners_axis_aligned():
+    geometry = ScanGeometry(
+        center_scanner_m=np.zeros(3),
+        fov_local_m=np.array(
+            [0.10, 0.08, 0.06]
+        ),
+        rotation_local_to_scanner=np.eye(3),
+    )
+
+    corners = (
+        scan_geometry_box_corners_scanner_m(
+            geometry
+        )
+    )
+
+    assert corners.shape == (8, 3)
+
+    np.testing.assert_allclose(
+        np.min(corners, axis=0),
+        [-0.05, -0.04, -0.03],
+        atol=1e-12,
+    )
+
+    np.testing.assert_allclose(
+        np.max(corners, axis=0),
+        [0.05, 0.04, 0.03],
+        atol=1e-12,
+    )
+
+
+def test_box_axial_center_plane_intersection():
+    geometry = ScanGeometry(
+        center_scanner_m=np.zeros(3),
+        fov_local_m=np.array(
+            [0.10, 0.08, 0.06]
+        ),
+        rotation_local_to_scanner=np.eye(3),
+    )
+
+    plane = (
+        localizer_image_plane_geometry(
+            orientation="Axial",
+            fov_m=0.20,
+            rows=96,
+            columns=96,
+        )
+    )
+
+    points = (
+        intersect_box_with_plane_scanner_m(
+            geometry,
+            plane,
+        )
+    )
+
+    expected = np.array(
+        [
+            [-0.05, -0.04, 0.0],
+            [-0.05,  0.04, 0.0],
+            [ 0.05, -0.04, 0.0],
+            [ 0.05,  0.04, 0.0],
+        ],
+        dtype=float,
+    )
+
+    assert points.shape == (4, 3)
+
+    np.testing.assert_allclose(
+        _sorted_scanner_points(points),
+        _sorted_scanner_points(expected),
+        atol=1e-12,
+    )
+
+
+def test_box_plane_no_intersection():
+    geometry = ScanGeometry(
+        center_scanner_m=np.array(
+            [0.0, 0.0, 0.20]
+        ),
+        fov_local_m=np.array(
+            [0.10, 0.08, 0.06]
+        ),
+        rotation_local_to_scanner=np.eye(3),
+    )
+
+    plane = (
+        localizer_image_plane_geometry(
+            orientation="Axial",
+            fov_m=0.20,
+            rows=96,
+            columns=96,
+        )
+    )
+
+    points = (
+        intersect_box_with_plane_scanner_m(
+            geometry,
+            plane,
+        )
+    )
+
+    assert points.shape == (0, 3)
+
+
+def test_box_plane_touching_face_returns_four_unique_points():
+    # Box spans z = 0.00 .. 0.06 m, so the Axial z=0
+    # image plane is exactly coincident with its lower face.
+    geometry = ScanGeometry(
+        center_scanner_m=np.array(
+            [0.0, 0.0, 0.03]
+        ),
+        fov_local_m=np.array(
+            [0.10, 0.08, 0.06]
+        ),
+        rotation_local_to_scanner=np.eye(3),
+    )
+
+    plane = (
+        localizer_image_plane_geometry(
+            orientation="Axial",
+            fov_m=0.20,
+            rows=96,
+            columns=96,
+        )
+    )
+
+    points = (
+        intersect_box_with_plane_scanner_m(
+            geometry,
+            plane,
+        )
+    )
+
+    expected = np.array(
+        [
+            [-0.05, -0.04, 0.0],
+            [-0.05,  0.04, 0.0],
+            [ 0.05, -0.04, 0.0],
+            [ 0.05,  0.04, 0.0],
+        ],
+        dtype=float,
+    )
+
+    assert points.shape == (4, 3)
+
+    np.testing.assert_allclose(
+        _sorted_scanner_points(points),
+        _sorted_scanner_points(expected),
+        atol=1e-12,
+    )
+
+
+def test_rotated_box_intersection_points_lie_on_plane():
+    geometry = ScanGeometry(
+        center_scanner_m=np.zeros(3),
+        fov_local_m=np.array(
+            [0.12, 0.08, 0.06]
+        ),
+        rotation_local_to_scanner=(
+            planning_euler_to_matrix(
+                20.0,
+                -15.0,
+                30.0,
+            )
+        ),
+    )
+
+    plane = (
+        localizer_image_plane_geometry(
+            orientation="Axial",
+            fov_m=0.20,
+            rows=96,
+            columns=96,
+        )
+    )
+
+    points = (
+        intersect_box_with_plane_scanner_m(
+            geometry,
+            plane,
+        )
+    )
+
+    # A plane through the center of a convex box produces
+    # a proper polygon. Depending on orientation it has
+    # four or six vertices.
+    assert points.shape[0] in (
+        4,
+        6,
+    )
+
+    assert points.shape[1] == 3
+
+    plane_coordinates = (
+        plane.scanner_to_plane_m(
+            points
+        )
+    )
+
+    np.testing.assert_allclose(
+        plane_coordinates[:, 2],
+        0.0,
+        atol=1e-10,
+    )
+
+    # No duplicated polygon vertices.
+    for first in range(
+        points.shape[0]
+    ):
+        for second in range(
+            first + 1,
+            points.shape[0],
+        ):
+            assert (
+                np.linalg.norm(
+                    points[first]
+                    - points[second]
+                )
+                > 1e-8
+            )
+
+
+def test_project_box_edges_to_plane_returns_full_wireframe():
+    # Deliberately move the box away from the Axial plane:
+    # there is no true intersection, but projection must
+    # still contain all twelve edges.
+    geometry = ScanGeometry(
+        center_scanner_m=np.array(
+            [0.0, 0.0, 0.20]
+        ),
+        fov_local_m=np.array(
+            [0.10, 0.08, 0.06]
+        ),
+        rotation_local_to_scanner=(
+            planning_euler_to_matrix(
+                15.0,
+                25.0,
+                -10.0,
+            )
+        ),
+    )
+
+    plane = (
+        localizer_image_plane_geometry(
+            orientation="Axial",
+            fov_m=0.20,
+            rows=96,
+            columns=96,
+        )
+    )
+
+    intersection = (
+        intersect_box_with_plane_scanner_m(
+            geometry,
+            plane,
+        )
+    )
+
+    assert intersection.shape == (0, 3)
+
+    projected_edges = (
+        project_box_edges_to_plane_scanner_m(
+            geometry,
+            plane,
+        )
+    )
+
+    assert projected_edges.shape == (
+        12,
+        2,
+        3,
+    )
+
+    projected_points = (
+        projected_edges.reshape(
+            -1,
+            3,
+        )
+    )
+
+    plane_coordinates = (
+        plane.scanner_to_plane_m(
+            projected_points
+        )
+    )
+
+    np.testing.assert_allclose(
+        plane_coordinates[:, 2],
+        0.0,
+        atol=1e-10,
+    )

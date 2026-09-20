@@ -552,7 +552,101 @@ _BOX_CORNER_SIGNS = np.array(
     ],
     dtype=float,
 )
+_BOX_EDGES = np.array(
+    [
+        [0, 1],
+        [0, 2],
+        [0, 4],
 
+        [1, 3],
+        [1, 5],
+
+        [2, 3],
+        [2, 6],
+
+        [3, 7],
+
+        [4, 5],
+        [4, 6],
+
+        [5, 7],
+        [6, 7],
+    ],
+    dtype=int,
+)
+
+
+def scan_geometry_box_corners_scanner_m(
+    scan_geometry: ScanGeometry,
+) -> np.ndarray:
+    """
+    Return the eight corners of a ScanGeometry box
+    in scanner X/Y/Z coordinates [m].
+
+    Output shape:
+        (8, 3)
+    """
+
+    center = np.asarray(
+        scan_geometry.center_scanner_m,
+        dtype=float,
+    )
+
+    sizes = np.asarray(
+        scan_geometry.fov_local_m,
+        dtype=float,
+    )
+
+    rotation = np.asarray(
+        scan_geometry.rotation_local_to_scanner,
+        dtype=float,
+    )
+
+    if center.shape != (3,):
+        raise ValueError(
+            "Scan center must have shape (3,)"
+        )
+
+    if sizes.shape != (3,):
+        raise ValueError(
+            "Scan FOV must have shape (3,)"
+        )
+
+    if rotation.shape != (3, 3):
+        raise ValueError(
+            "Scan rotation must have shape (3, 3)"
+        )
+
+    if (
+        not np.all(np.isfinite(center))
+        or not np.all(np.isfinite(sizes))
+        or not np.all(np.isfinite(rotation))
+    ):
+        raise ValueError(
+            "Scan geometry must contain finite values"
+        )
+
+    if np.any(sizes <= 0):
+        raise ValueError(
+            "Scan FOV dimensions must be positive"
+        )
+
+    half_sizes = (
+        0.5 * sizes
+    )
+
+    local_corners = (
+        _BOX_CORNER_SIGNS
+        * half_sizes
+    )
+
+    scanner_corners = (
+        center[None, :]
+        + local_corners
+        @ rotation.T
+    )
+
+    return scanner_corners
 
 def planning_box_corners_in_encoding_m(
     box,
@@ -1005,3 +1099,245 @@ def localizer_image_plane_geometry(
         rows=int(rows),
         columns=int(columns),
     )
+
+def _append_unique_point(
+    points,
+    candidate,
+    tolerance_m,
+):
+    """
+    Append candidate only when no existing point is
+    within tolerance_m.
+    """
+
+    candidate = np.asarray(
+        candidate,
+        dtype=float,
+    )
+
+    for existing in points:
+        if (
+            float(
+                np.linalg.norm(
+                    existing - candidate
+                )
+            )
+            <= tolerance_m
+        ):
+            return
+
+    points.append(
+        candidate.copy()
+    )
+
+
+def intersect_box_with_plane_scanner_m(
+    scan_geometry: ScanGeometry,
+    image_plane: ImagePlaneGeometry,
+    tolerance_m: float = 1e-9,
+) -> np.ndarray:
+    """
+    Intersect a scanner-space oriented box with an image
+    center plane.
+
+    Returns unique intersection vertices in scanner X/Y/Z
+    coordinates [m].
+
+    For three or more points, vertices are ordered around
+    the polygon perimeter in the image plane's horizontal /
+    vertical coordinates.
+
+    Possible outputs include:
+
+        (0, 3): no intersection
+        (1, 3): tangent at one vertex
+        (2, 3): tangent/intersection segment
+        (N, 3): polygon, normally N = 3..6
+    """
+
+    if (
+        not np.isfinite(tolerance_m)
+        or tolerance_m <= 0
+    ):
+        raise ValueError(
+            "Plane intersection tolerance must be "
+            "finite and positive"
+        )
+
+    corners = (
+        scan_geometry_box_corners_scanner_m(
+            scan_geometry
+        )
+    )
+
+    plane_coordinates = (
+        image_plane.scanner_to_plane_m(
+            corners
+        )
+    )
+
+    signed_distances = (
+        plane_coordinates[:, 2]
+    )
+
+    points = []
+
+    for start_index, end_index in _BOX_EDGES:
+
+        p0 = corners[start_index]
+        p1 = corners[end_index]
+
+        d0 = float(
+            signed_distances[start_index]
+        )
+
+        d1 = float(
+            signed_distances[end_index]
+        )
+
+        on0 = abs(d0) <= tolerance_m
+        on1 = abs(d1) <= tolerance_m
+
+        # Entire box edge lies in the image plane.
+        if on0 and on1:
+            _append_unique_point(
+                points,
+                p0,
+                tolerance_m,
+            )
+
+            _append_unique_point(
+                points,
+                p1,
+                tolerance_m,
+            )
+
+            continue
+
+        # Exactly one endpoint lies in the plane.
+        if on0:
+            _append_unique_point(
+                points,
+                p0,
+                tolerance_m,
+            )
+            continue
+
+        if on1:
+            _append_unique_point(
+                points,
+                p1,
+                tolerance_m,
+            )
+            continue
+
+        # Opposite signs mean the edge crosses the plane.
+        if (
+            (d0 < 0.0 and d1 > 0.0)
+            or
+            (d0 > 0.0 and d1 < 0.0)
+        ):
+            t = (
+                d0
+                / (d0 - d1)
+            )
+
+            point = (
+                p0
+                + t * (p1 - p0)
+            )
+
+            _append_unique_point(
+                points,
+                point,
+                tolerance_m,
+            )
+
+    if len(points) == 0:
+        return np.empty(
+            (0, 3),
+            dtype=float,
+        )
+
+    result = np.asarray(
+        points,
+        dtype=float,
+    )
+
+    # For a polygon, order vertices around its centroid.
+    #
+    # Do this entirely in the explicit image-plane u/v basis;
+    # do not make any handedness assumption.
+    if result.shape[0] >= 3:
+
+        plane_points = (
+            image_plane.scanner_to_plane_m(
+                result
+            )
+        )
+
+        uv = plane_points[:, :2]
+
+        centroid = np.mean(
+            uv,
+            axis=0,
+        )
+
+        angles = np.arctan2(
+            uv[:, 1] - centroid[1],
+            uv[:, 0] - centroid[0],
+        )
+
+        order = np.argsort(
+            angles
+        )
+
+        result = result[order]
+
+    return result
+
+
+def project_box_edges_to_plane_scanner_m(
+    scan_geometry: ScanGeometry,
+    image_plane: ImagePlaneGeometry,
+) -> np.ndarray:
+    """
+    Orthographically project all twelve 3D box edges onto
+    the image center plane.
+
+    No hidden-edge removal is performed.
+
+    Output shape:
+        (12, 2, 3)
+
+    dimensions:
+        edge
+        endpoint
+        scanner XYZ
+    """
+
+    corners = (
+        scan_geometry_box_corners_scanner_m(
+            scan_geometry
+        )
+    )
+
+    plane_coordinates = (
+        image_plane.scanner_to_plane_m(
+            corners
+        )
+    )
+
+    signed_distances = (
+        plane_coordinates[:, 2]
+    )
+
+    projected_corners = (
+        corners
+        - signed_distances[:, None]
+        * image_plane.normal_scanner[None, :]
+    )
+
+    return projected_corners[
+        _BOX_EDGES
+    ]
