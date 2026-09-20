@@ -28,6 +28,9 @@ from common.geometry import (
     planning_euler_to_matrix,
     planning_matrix_to_euler,
     planning_box_corners_in_encoding_m,
+    planning_box_to_scan_geometry,
+    intersect_box_with_plane_scanner_m,
+    project_box_edges_to_plane_scanner_m,
     cm_to_m,
     localizer_image_plane_geometry,
 )
@@ -107,6 +110,17 @@ class ViewerWidget(QWidget):
         # displayed Localizer image.
         self.planning_image_plane = None
 
+        # Physical size of the normalized planning reference
+        # volume. Current Localizer v0 uses the same square FOV
+        # on all scanner axes.
+        self.planning_reference_fov_m = None
+
+        # Canonical FOV display derived from the shared 3D box:
+        # dashed = full wireframe projection
+        # solid  = true box / Localizer-plane intersection
+        self.fov_projection_item = None
+        self.fov_intersection_item = None
+
         self.fov_basis_items = []
 
         # Orientation of the target 3D GRE protocol
@@ -161,8 +175,13 @@ class ViewerWidget(QWidget):
         self.fov_label = None
         self.shim_label = None
 
-        # Plane geometry belongs to the currently loaded image.
+        # Physical geometry belongs to the currently loaded image.
         self.planning_image_plane = None
+        self.planning_reference_fov_m = None
+
+        # Overlay items belonged to the deleted ImageView.
+        self.fov_projection_item = None
+        self.fov_intersection_item = None
 
         self._planning_interactions.clear()
 
@@ -320,7 +339,9 @@ class ViewerWidget(QWidget):
         else:
             self.planning_target_orientation = None
 
-        self._update_fov_center_line()
+        # The old GRE slab-center line is no longer part of
+        # the v0 FOV display semantics.
+        self._clear_fov_center_line()
 
     def _planning_plane_projection_and_normal(
         self,
@@ -610,6 +631,213 @@ class ViewerWidget(QWidget):
 
         self.widget.getView().addItem(
             self.fov_center_line
+        )
+
+    def _clear_fov_geometry_overlay(
+        self,
+    ):
+        """
+        Remove the canonical solid/dashed FOV display.
+        """
+
+        if isinstance(
+            self.widget,
+            pg.ImageView,
+        ):
+            view = self.widget.getView()
+
+            for item in (
+                self.fov_projection_item,
+                self.fov_intersection_item,
+            ):
+                if item is None:
+                    continue
+
+                try:
+                    view.removeItem(
+                        item
+                    )
+                except Exception:
+                    pass
+
+        self.fov_projection_item = None
+        self.fov_intersection_item = None
+
+    def _update_fov_geometry_overlay(
+        self,
+    ):
+        """
+        Rebuild the canonical FOV display for this Localizer.
+
+        Solid:
+            true intersection between the current Localizer
+            center plane and the shared 3D planning FOV.
+
+        Dashed:
+            orthographic projection of all twelve 3D FOV
+            edges onto the Localizer center plane.
+
+        The RectROI remains an interaction control only.
+        It is not the canonical FOV display.
+        """
+
+        self._clear_fov_geometry_overlay()
+
+        if self.planning_state is None:
+            return
+
+        if self.planning_image_plane is None:
+            return
+
+        if self.planning_reference_fov_m is None:
+            return
+
+        if not isinstance(
+            self.widget,
+            pg.ImageView,
+        ):
+            return
+
+        reference_fov_m = float(
+            self.planning_reference_fov_m
+        )
+
+        if (
+            not np.isfinite(reference_fov_m)
+            or reference_fov_m <= 0.0
+        ):
+            return
+
+        # Box3D is stored in normalized scanner X/Y/Z coordinates.
+        # Convert it to physical scanner-space geometry.
+        reference_fov_mm = np.full(
+            3,
+            reference_fov_m * 1000.0,
+            dtype=float,
+        )
+
+        scan_geometry = (
+            planning_box_to_scan_geometry(
+                fov_box=(
+                    self.planning_state
+                    .fov_box
+                    .as_dict()
+                ),
+                reference_fov_mm=(
+                    reference_fov_mm
+                ),
+            )
+        )
+
+        view = self.widget.getView()
+
+        # -------------------------------------------------
+        # Dashed: complete 3D FOV wireframe projection
+        # -------------------------------------------------
+
+        projected_edges_scanner = (
+            project_box_edges_to_plane_scanner_m(
+                scan_geometry,
+                self.planning_image_plane,
+            )
+        )
+
+        projected_edges_xy = (
+            self.planning_image_plane
+            .scanner_to_image_xy(
+                projected_edges_scanner
+            )
+        )
+
+        projection_x = []
+        projection_y = []
+
+        for edge in projected_edges_xy:
+            projection_x.extend(
+                [
+                    float(edge[0, 0]),
+                    float(edge[1, 0]),
+                    np.nan,
+                ]
+            )
+
+            projection_y.extend(
+                [
+                    float(edge[0, 1]),
+                    float(edge[1, 1]),
+                    np.nan,
+                ]
+            )
+
+        self.fov_projection_item = (
+            pg.PlotDataItem(
+                projection_x,
+                projection_y,
+                connect="finite",
+                pen=pg.mkPen(
+                    "y",
+                    width=2,
+                    style=Qt.DashLine,
+                ),
+            )
+        )
+
+        self.fov_projection_item.setZValue(
+            20
+        )
+
+        view.addItem(
+            self.fov_projection_item
+        )
+
+        # -------------------------------------------------
+        # Solid: true FOV / current Localizer intersection
+        # -------------------------------------------------
+
+        intersection_scanner = (
+            intersect_box_with_plane_scanner_m(
+                scan_geometry,
+                self.planning_image_plane,
+            )
+        )
+
+        # One tangent point has no visible line.
+        if intersection_scanner.shape[0] < 2:
+            return
+
+        intersection_xy = (
+            self.planning_image_plane
+            .scanner_to_image_xy(
+                intersection_scanner
+            )
+        )
+
+        # A proper polygon must be explicitly closed.
+        if intersection_xy.shape[0] >= 3:
+            intersection_xy = np.vstack(
+                [
+                    intersection_xy,
+                    intersection_xy[0],
+                ]
+            )
+
+        self.fov_intersection_item = (
+            pg.PlotDataItem(
+                intersection_xy[:, 0],
+                intersection_xy[:, 1],
+                pen=pg.mkPen(
+                    "y",
+                    width=3,
+                ),
+            )
+        )
+
+        self.fov_intersection_item.setZValue(
+            30
+        )
+
+        view.addItem(
+            self.fov_intersection_item
         )
 
     def _plane_axes(self):
@@ -1865,8 +2093,8 @@ class ViewerWidget(QWidget):
                 self.planning_state.fov_box
             ),
             pen=pg.mkPen(
-                "y",
-                width=3,
+                (255, 255, 0, 80),
+                width=1,
             ),
             movable=True,
             rotatable=True,
@@ -1875,6 +2103,9 @@ class ViewerWidget(QWidget):
 
         self.widget.getView().addItem(
             self.fov_roi
+        )
+        self.fov_roi.setZValue(
+            40
         )
         self.fov_roi.addRotateHandle(
             [1.0, 0.0],
@@ -2003,7 +2234,9 @@ class ViewerWidget(QWidget):
 
         self._update_fov_basis_indicator()
 
-        self._update_fov_center_line()
+        self._clear_fov_center_line()
+
+        self._update_fov_geometry_overlay()
 
     def _update_planning_labels(self):
         """
@@ -2095,7 +2328,7 @@ class ViewerWidget(QWidget):
 
         self._update_fov_basis_indicator()
 
-        self._update_fov_center_line()
+        self._update_fov_geometry_overlay()
 
         self.planning_changed.emit()
 
@@ -2115,7 +2348,7 @@ class ViewerWidget(QWidget):
             self.planning_state.fov_box,
         )
 
-        self._update_fov_center_line()
+        self._update_fov_geometry_overlay()
 
         self.planning_changed.emit()
 
@@ -2219,7 +2452,7 @@ class ViewerWidget(QWidget):
 
         self._update_fov_basis_indicator()
 
-        self._update_fov_center_line()
+        self._update_fov_geometry_overlay()
 
     def set_reconstruction_overlay_context(
         self,
@@ -2632,12 +2865,14 @@ class ViewerWidget(QWidget):
 
     def clear_planning_context(self):
         self._clear_fov_center_line()
+        self._clear_fov_geometry_overlay()
 
         self.planning_orientation = None
         self.planning_state = None
 
         # Plane geometry belongs to the currently loaded image.
         self.planning_image_plane = None
+        self.planning_reference_fov_m = None
 
         self.fov_roi = None
         self.shim_roi = None
@@ -2674,6 +2909,7 @@ class ViewerWidget(QWidget):
         # planning geometry contract.
         # -------------------------------------------------
         self.planning_image_plane = None
+        self.planning_reference_fov_m = None
 
         if (
             task is not None
@@ -2686,19 +2922,28 @@ class ViewerWidget(QWidget):
                     task.parameters["FOV"]
                 )
 
-                if not np.isfinite(fov_cm) or fov_cm <= 0:
+                if (
+                    not np.isfinite(fov_cm)
+                    or fov_cm <= 0
+                ):
                     raise ValueError(
                         "Invalid Localizer FOV"
                     )
+
+                fov_m = float(
+                    cm_to_m(fov_cm)
+                )
+
+                self.planning_reference_fov_m = (
+                    fov_m
+                )
 
                 self.planning_image_plane = (
                     localizer_image_plane_geometry(
                         orientation=(
                             self.planning_orientation
                         ),
-                        fov_m=float(
-                            cm_to_m(fov_cm)
-                        ),
+                        fov_m=fov_m,
                         rows=int(ds.Rows),
                         columns=int(ds.Columns),
                     )
@@ -2716,6 +2961,7 @@ class ViewerWidget(QWidget):
                 )
 
                 self.planning_image_plane = None
+                self.planning_reference_fov_m = None
 
         row_spacing_mm = 1.0
         column_spacing_mm = 1.0
