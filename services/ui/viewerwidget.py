@@ -114,6 +114,10 @@ class ViewerWidget(QWidget):
         # on all scanner axes.
         self.planning_reference_fov_m = None
 
+        # Pixel data belonging to the currently displayed
+        # single-slice Localizer image.
+        self.planning_image_array = None
+
         # Canonical FOV display derived from the shared 3D box:
         # dashed = full wireframe projection
         # solid  = true box / Localizer-plane intersection
@@ -166,6 +170,7 @@ class ViewerWidget(QWidget):
         # Physical geometry belongs to the currently loaded image.
         self.planning_image_plane = None
         self.planning_reference_fov_m = None
+        self.planning_image_array = None
 
         # Overlay items belonged to the deleted ImageView.
         self.fov_projection_item = None
@@ -2531,6 +2536,35 @@ class ViewerWidget(QWidget):
                 line
             )
 
+    def get_localizer_plane_image(
+        self,
+    ):
+        """
+        Return the currently displayed Localizer image together
+        with its explicit scanner-space geometry.
+
+        Returns:
+            (orientation, image_array, ImagePlaneGeometry)
+
+        or None when this viewer is not displaying a valid
+        Localizer planning image.
+        """
+
+        if self.planning_orientation is None:
+            return None
+
+        if self.planning_image_plane is None:
+            return None
+
+        if self.planning_image_array is None:
+            return None
+
+        return (
+            self.planning_orientation,
+            self.planning_image_array.copy(),
+            self.planning_image_plane,
+        )
+
     def clear_planning_context(self):
         self._clear_fov_geometry_overlay()
 
@@ -2540,6 +2574,7 @@ class ViewerWidget(QWidget):
         # Plane geometry belongs to the currently loaded image.
         self.planning_image_plane = None
         self.planning_reference_fov_m = None
+        self.planning_image_array = None
 
         self.fov_roi = None
         self.shim_roi = None
@@ -2667,6 +2702,34 @@ class ViewerWidget(QWidget):
         for filenameDCM in lstFilesDCM:
             ds = pydicom.dcmread(filenameDCM)
             ArrayDicom[lstFilesDCM.index(filenameDCM), :, :] = ds.pixel_array
+
+        # -------------------------------------------------
+        # Pixel data handed to the 3D planning view.
+        #
+        # The Localizer planning contract is explicitly
+        # single-slice: a multi-slice series is NOT silently
+        # reduced to its first slice.
+        # -------------------------------------------------
+        self.planning_image_array = None
+
+        if (
+            task is not None
+            and task.sequence == "localizer"
+            and self.planning_image_plane is not None
+        ):
+            if ArrayDicom.shape[0] == 1:
+                self.planning_image_array = (
+                    np.asarray(
+                        ArrayDicom[0],
+                    ).copy()
+                )
+            else:
+                log.warning(
+                    "Expected single-slice Localizer DICOM, "
+                    "but received "
+                    + str(ArrayDicom.shape[0])
+                    + " slices"
+                )
 
         pg.setConfigOptions(imageAxisOrder="row-major", antialias=True)
 
