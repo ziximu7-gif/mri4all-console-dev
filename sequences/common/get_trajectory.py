@@ -71,8 +71,8 @@ def choose_pe_order(ndims: int = 3, npe: np.ndarray = [70, 28], traj: str = 'cen
             for pe1 in range(npe[0]):
                 for pe2 in range(npe[1]):
                     pe += 1
-                    pe_order[pe, 0] = pe0_order[pe1]
-                    pe_order[pe, 1] = pe1_order[pe2]
+                    pe_order[pe, 0] = pe0_order[pe1, 0]
+                    pe_order[pe, 1] = pe1_order[pe2, 0]
 
         elif traj == 'hybrid': # one linear-up (1st column), one center_out (2nd column), TODO:determine the inner/outer loop
             num_total_pe = np.prod(npe[0] * npe[1])
@@ -93,7 +93,7 @@ def choose_pe_order(ndims: int = 3, npe: np.ndarray = [70, 28], traj: str = 'cen
                 for pe2 in range(npe[1]):
                     pe += 1
                     pe_order[pe, 0] = -(pe1 - int(npe[0]/2))
-                    pe_order[pe, 1] = pe1_order[pe2]
+                    pe_order[pe, 1] = pe1_order[pe2, 0]
 
         elif traj == 'linear_up': # linear_up for both phase encoding direction
             print("Using linear-up ordering")

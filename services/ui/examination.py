@@ -40,6 +40,7 @@ import services.ui.control as control
 from services.ui.errors import SequenceUIFailed, UIException
 from common.geometry import (
     cm_to_mm,
+    cm_to_m,
 )
 import external.seq.adjustments_acq.config as cfg
 
@@ -1427,13 +1428,59 @@ class ExaminationWindow(QMainWindow):
             )
         )
 
+    def _set_planning3d_context_from_localizer(
+        self,
+        scan_task,
+    ):
+        """
+        Give the 3D planning viewer the same shared
+        PlanningState and physical Localizer reference FOV
+        used by the 2D planning views.
+        """
+
+        planning3d = getattr(
+            self,
+            "planning3d",
+            None,
+        )
+
+        if planning3d is None:
+            return
+
+        try:
+            fov_cm = float(
+                scan_task.parameters["FOV"]
+            )
+
+            fov_m = float(
+                cm_to_m(
+                    fov_cm
+                )
+            )
+
+            planning3d.set_planning_context(
+                self.planning_state,
+                fov_m,
+            )
+
+        except (
+            KeyError,
+            TypeError,
+            ValueError,
+        ):
+            log.warning(
+                "3D planning geometry unavailable: "
+                "missing or invalid Localizer FOV"
+            )
+
+            planning3d.clear_planning_context()
+
     def refresh_planning_boxes(self):
         """
         One viewer changed the shared Box3D.
 
-        Refresh the OTHER projections while
-        leaving the actively manipulated ROI
-        under direct mouse control.
+        Refresh the OTHER 2D projections and the shared
+        read-only 3D planning view.
         """
 
         source_viewer = (
@@ -1449,6 +1496,15 @@ class ExaminationWindow(QMainWindow):
                 continue
 
             viewer.refresh_planning_rois()
+
+        planning3d = getattr(
+            self,
+            "planning3d",
+            None,
+        )
+
+        if planning3d is not None:
+            planning3d.refresh_planning_geometry()
 
         log.debug(
             "Planning state: "
@@ -2009,6 +2065,10 @@ class ExaminationWindow(QMainWindow):
 
                 self.load_planning_state_from_task(scan_task)
 
+                self._set_planning3d_context_from_localizer(
+                    scan_task
+                )
+
                 orientation = {
                     1: "Axial",
                     2: "Coronal",
@@ -2075,6 +2135,10 @@ class ExaminationWindow(QMainWindow):
             self.applyPlanningButton.setEnabled(True)
 
             self.load_planning_state_from_task(
+                scan_task
+            )
+
+            self._set_planning3d_context_from_localizer(
                 scan_task
             )
 
