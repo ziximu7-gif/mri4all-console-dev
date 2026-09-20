@@ -16,6 +16,7 @@ from common.geometry import (
     intersect_box_with_plane_scanner_m,
     project_box_edges_to_plane_scanner_m,
     scan_geometry_box_corners_scanner_m,
+    scan_geometry_box_edges_scanner_m,
 )
 from common.geometry import (
     planning_euler_to_matrix,
@@ -957,4 +958,180 @@ def test_project_box_edges_to_plane_returns_full_wireframe():
         plane_coordinates[:, 2],
         0.0,
         atol=1e-10,
+    )
+
+
+def test_scan_geometry_box_edges_scanner_m_returns_unique_corner_pairs():
+    geometry = ScanGeometry(
+        center_scanner_m=np.array(
+            [0.01, -0.02, 0.03]
+        ),
+        fov_local_m=np.array(
+            [0.10, 0.08, 0.06]
+        ),
+        rotation_local_to_scanner=(
+            planning_euler_to_matrix(
+                15.0,
+                25.0,
+                -10.0,
+            )
+        ),
+    )
+
+    corners = (
+        scan_geometry_box_corners_scanner_m(
+            geometry
+        )
+    )
+
+    edges = (
+        scan_geometry_box_edges_scanner_m(
+            geometry
+        )
+    )
+
+    assert edges.shape == (12, 2, 3)
+
+    # Every endpoint must be one of the eight box corners.
+    corner_pairs = []
+
+    for edge in edges:
+        pair = []
+
+        for point in edge:
+            distances = np.linalg.norm(
+                corners - point,
+                axis=1,
+            )
+
+            assert np.min(distances) < 1e-12
+
+            pair.append(
+                int(
+                    np.argmin(distances)
+                )
+            )
+
+        assert pair[0] != pair[1]
+
+        corner_pairs.append(
+            frozenset(pair)
+        )
+
+    # Each of the twelve box edges appears exactly once.
+    assert len(set(corner_pairs)) == 12
+
+
+def test_scan_geometry_box_edges_scanner_m_preserves_edge_lengths():
+    sizes = np.array(
+        [0.10, 0.08, 0.06]
+    )
+
+    geometry = ScanGeometry(
+        center_scanner_m=np.array(
+            [0.02, 0.01, -0.03]
+        ),
+        fov_local_m=sizes,
+        rotation_local_to_scanner=(
+            planning_euler_to_matrix(
+                -20.0,
+                35.0,
+                12.0,
+            )
+        ),
+    )
+
+    edges = (
+        scan_geometry_box_edges_scanner_m(
+            geometry
+        )
+    )
+
+    lengths = np.linalg.norm(
+        edges[:, 0] - edges[:, 1],
+        axis=1,
+    )
+
+    # Rotation must not change the physical edge lengths:
+    # four edges per local axis, in any orientation.
+    np.testing.assert_allclose(
+        np.sort(lengths),
+        np.sort(
+            np.repeat(
+                sizes,
+                4,
+            )
+        ),
+        atol=1e-12,
+    )
+
+
+def test_scan_geometry_box_edges_scanner_m_matches_projected_topology():
+    geometry = ScanGeometry(
+        center_scanner_m=np.array(
+            [0.0, 0.0, 0.20]
+        ),
+        fov_local_m=np.array(
+            [0.10, 0.08, 0.06]
+        ),
+        rotation_local_to_scanner=(
+            planning_euler_to_matrix(
+                15.0,
+                25.0,
+                -10.0,
+            )
+        ),
+    )
+
+    plane = (
+        localizer_image_plane_geometry(
+            orientation="Axial",
+            fov_m=0.20,
+            rows=96,
+            columns=96,
+        )
+    )
+
+    edges = (
+        scan_geometry_box_edges_scanner_m(
+            geometry
+        )
+    )
+
+    projected_edges = (
+        project_box_edges_to_plane_scanner_m(
+            geometry,
+            plane,
+        )
+    )
+
+    assert projected_edges.shape == edges.shape
+
+    # The projection is orthogonal, so it may only remove the
+    # plane-normal component, edge by edge, in the very same
+    # order. This pins both helpers to one topology.
+    normal = plane.normal_scanner
+
+    normal_distances = (
+        edges
+        - plane.center_scanner_m[
+            None,
+            None,
+            :
+        ]
+    ) @ normal
+
+    np.testing.assert_allclose(
+        projected_edges,
+        edges
+        - normal_distances[
+            ...,
+            None,
+        ]
+        * normal[
+            None,
+            None,
+            :
+        ],
+        atol=1e-12,
     )

@@ -648,6 +648,36 @@ def scan_geometry_box_corners_scanner_m(
 
     return scanner_corners
 
+
+def scan_geometry_box_edges_scanner_m(
+    scan_geometry: ScanGeometry,
+) -> np.ndarray:
+    """
+    Return the twelve edges of a ScanGeometry box in
+    scanner X/Y/Z coordinates [m].
+
+    Output shape:
+        (12, 2, 3)
+
+    dimensions:
+        edge
+        endpoint
+        scanner XYZ
+
+    This is the single source of truth for box edge
+    topology. Callers must not re-declare the corner
+    index table.
+    """
+
+    corners = (
+        scan_geometry_box_corners_scanner_m(
+            scan_geometry
+        )
+    )
+
+    return corners[_BOX_EDGES]
+
+
 def planning_box_corners_in_encoding_m(
     box,
     reference_fov_mm,

@@ -9,34 +9,7 @@ import pyqtgraph.opengl as gl
 
 from common.geometry import (
     planning_box_to_scan_geometry,
-    scan_geometry_box_corners_scanner_m,
-)
-
-# Topology of a box whose eight corners use the
-# ordering returned by scan_geometry_box_corners_scanner_m().
-#
-# Each row contains the endpoint indices of one edge.
-_BOX_EDGES = np.array(
-    [
-        [0, 1],
-        [0, 2],
-        [0, 4],
-
-        [1, 3],
-        [1, 5],
-
-        [2, 3],
-        [2, 6],
-
-        [3, 7],
-
-        [4, 5],
-        [4, 6],
-
-        [5, 7],
-        [6, 7],
-    ],
-    dtype=int,
+    scan_geometry_box_edges_scanner_m,
 )
 
 
@@ -489,16 +462,10 @@ class Planning3DWidget(QWidget):
             )
         )
 
-        corners = (
-            scan_geometry_box_corners_scanner_m(
+        edges = (
+            scan_geometry_box_edges_scanner_m(
                 scan_geometry
             )
-        )
-
-        edges = (
-            corners[
-                _BOX_EDGES
-            ]
         )
 
         # GLLinePlotItem mode="lines":
