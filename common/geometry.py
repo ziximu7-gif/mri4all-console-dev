@@ -639,3 +639,369 @@ def planning_box_corners_in_encoding_m(
     )
 
     return logical_corners
+
+
+@dataclass(frozen=True)
+class ImagePlaneGeometry:
+    """
+    Physical geometry of one displayed 2D image center plane.
+
+    All vectors are expressed in scanner X/Y/Z coordinates.
+
+    center_scanner_m:
+        Scanner-space center of the image plane [m].
+
+    horizontal_scanner:
+        Unit scanner-space vector corresponding to increasing
+        viewer/image x.
+
+    vertical_scanner:
+        Unit scanner-space vector corresponding to increasing
+        viewer/image y.
+
+    normal_scanner:
+        Unit scanner-space slice normal.
+
+    width_m / height_m:
+        Physical image FOV along horizontal / vertical axes [m].
+
+    columns / rows:
+        Displayed image matrix dimensions.
+
+    This represents the CENTER PLANE of the acquired finite slice.
+    Slice thickness is acquisition information and is deliberately
+    not part of this plane geometry.
+    """
+
+    center_scanner_m: np.ndarray
+    horizontal_scanner: np.ndarray
+    vertical_scanner: np.ndarray
+    normal_scanner: np.ndarray
+    width_m: float
+    height_m: float
+    rows: int
+    columns: int
+
+    def __post_init__(self):
+
+        for name in (
+            "center_scanner_m",
+            "horizontal_scanner",
+            "vertical_scanner",
+            "normal_scanner",
+        ):
+            value = np.asarray(
+                getattr(self, name),
+                dtype=float,
+            )
+
+            if value.shape != (3,):
+                raise ValueError(
+                    f"{name} must have shape (3,)"
+                )
+
+            if not np.all(
+                np.isfinite(value)
+            ):
+                raise ValueError(
+                    f"{name} must contain only "
+                    "finite values"
+                )
+
+            object.__setattr__(
+                self,
+                name,
+                value,
+            )
+
+        for name in (
+            "horizontal_scanner",
+            "vertical_scanner",
+            "normal_scanner",
+        ):
+            vector = getattr(self, name)
+
+            if not np.isclose(
+                float(np.linalg.norm(vector)),
+                1.0,
+                rtol=0.0,
+                atol=1e-8,
+            ):
+                raise ValueError(
+                    f"{name} must be a unit vector"
+                )
+
+        # Pairwise orthogonality. Handedness is deliberately NOT
+        # enforced: the repository convention defines the third
+        # orientation channel explicitly, and Coronal is mirrored
+        # relative to cross(horizontal, vertical).
+        for first, second in (
+            (
+                "horizontal_scanner",
+                "vertical_scanner",
+            ),
+            (
+                "horizontal_scanner",
+                "normal_scanner",
+            ),
+            (
+                "vertical_scanner",
+                "normal_scanner",
+            ),
+        ):
+            dot = float(
+                np.dot(
+                    getattr(self, first),
+                    getattr(self, second),
+                )
+            )
+
+            if not np.isclose(
+                dot,
+                0.0,
+                rtol=0.0,
+                atol=1e-8,
+            ):
+                raise ValueError(
+                    f"{first} and {second} "
+                    "must be orthogonal"
+                )
+
+        if (
+            not np.isfinite(self.width_m)
+            or self.width_m <= 0
+        ):
+            raise ValueError(
+                "Image width must be finite and positive"
+            )
+
+        if (
+            not np.isfinite(self.height_m)
+            or self.height_m <= 0
+        ):
+            raise ValueError(
+                "Image height must be finite and positive"
+            )
+
+        if self.rows <= 0:
+            raise ValueError(
+                "Image rows must be positive"
+            )
+
+        if self.columns <= 0:
+            raise ValueError(
+                "Image columns must be positive"
+            )
+
+    @property
+    def basis_scanner(self):
+        return np.column_stack(
+            [
+                self.horizontal_scanner,
+                self.vertical_scanner,
+                self.normal_scanner,
+            ]
+        )
+
+    def scanner_to_plane_m(
+        self,
+        points_scanner_m,
+    ):
+        """
+        Convert scanner X/Y/Z points into this plane's
+        [horizontal, vertical, normal] coordinates [m].
+        """
+
+        points = np.asarray(
+            points_scanner_m,
+            dtype=float,
+        )
+
+        if (
+            points.ndim == 0
+            or points.shape[-1] != 3
+        ):
+            raise ValueError(
+                "Points must have a final "
+                "dimension of 3"
+            )
+
+        relative = (
+            points
+            - self.center_scanner_m
+        )
+
+        return (
+            relative
+            @ self.basis_scanner
+        )
+
+    def plane_to_scanner_m(
+        self,
+        plane_coordinates_m,
+    ):
+        """
+        Inverse of scanner_to_plane_m(): convert
+        [horizontal, vertical, normal] coordinates [m]
+        into scanner X/Y/Z points.
+        """
+
+        plane_coordinates = np.asarray(
+            plane_coordinates_m,
+            dtype=float,
+        )
+
+        if (
+            plane_coordinates.ndim == 0
+            or plane_coordinates.shape[-1] != 3
+        ):
+            raise ValueError(
+                "Plane coordinates must have a "
+                "final dimension of 3"
+            )
+
+        return (
+            self.center_scanner_m
+            + plane_coordinates
+            @ self.basis_scanner.T
+        )
+
+    def scanner_to_image_xy(
+        self,
+        points_scanner_m,
+    ):
+        """
+        Orthographic scanner -> image mapping.
+
+        The normal component is ignored: a point need not lie on
+        the center plane for its image x/y to be well defined.
+        Coordinates are NOT clipped to the image bounds.
+        """
+
+        plane_coordinates = (
+            self.scanner_to_plane_m(
+                points_scanner_m
+            )
+        )
+
+        horizontal_m = plane_coordinates[..., 0]
+        vertical_m = plane_coordinates[..., 1]
+
+        image_x = (
+            horizontal_m / self.width_m
+            + 0.5
+        ) * self.columns
+
+        image_y = (
+            vertical_m / self.height_m
+            + 0.5
+        ) * self.rows
+
+        return np.stack(
+            [image_x, image_y],
+            axis=-1,
+        )
+
+    def image_xy_to_scanner_m(
+        self,
+        image_xy,
+    ):
+        """
+        Inverse of scanner_to_image_xy() for points on the
+        CENTER PLANE (normal coordinate 0).
+        """
+
+        image_xy = np.asarray(
+            image_xy,
+            dtype=float,
+        )
+
+        if (
+            image_xy.ndim == 0
+            or image_xy.shape[-1] != 2
+        ):
+            raise ValueError(
+                "Image coordinates must have a "
+                "final dimension of 2"
+            )
+
+        horizontal_m = (
+            image_xy[..., 0] / self.columns
+            - 0.5
+        ) * self.width_m
+
+        vertical_m = (
+            image_xy[..., 1] / self.rows
+            - 0.5
+        ) * self.height_m
+
+        normal_m = np.zeros_like(
+            horizontal_m
+        )
+
+        plane_coordinates = np.stack(
+            [
+                horizontal_m,
+                vertical_m,
+                normal_m,
+            ],
+            axis=-1,
+        )
+
+        return self.plane_to_scanner_m(
+            plane_coordinates
+        )
+
+
+def localizer_image_plane_geometry(
+    orientation,
+    fov_m,
+    rows,
+    columns,
+):
+    """
+    Scanner-space center plane of one Localizer image.
+
+    The Localizer is scanner-base and centered at isocenter, so the
+    center is the origin. All three axes come from
+    orientation_channels(): read -> horizontal, phase -> vertical,
+    third channel -> normal. The normal is therefore taken from the
+    explicit repository convention and NOT from
+    cross(horizontal, vertical).
+
+    The Localizer FOV is square, so width and height both equal
+    fov_m. Slice thickness is acquisition information and is not
+    part of this plane geometry.
+    """
+
+    read_axis, phase_axis, slice_axis = (
+        orientation_channels(
+            orientation
+        )
+    )
+
+    return ImagePlaneGeometry(
+        center_scanner_m=np.zeros(
+            3,
+            dtype=float,
+        ),
+        horizontal_scanner=(
+            _AXIS_UNIT_VECTORS[
+                read_axis
+            ].copy()
+        ),
+        vertical_scanner=(
+            _AXIS_UNIT_VECTORS[
+                phase_axis
+            ].copy()
+        ),
+        normal_scanner=(
+            _AXIS_UNIT_VECTORS[
+                slice_axis
+            ].copy()
+        ),
+        width_m=float(fov_m),
+        height_m=float(fov_m),
+        rows=int(rows),
+        columns=int(columns),
+    )

@@ -28,6 +28,8 @@ from common.geometry import (
     planning_euler_to_matrix,
     planning_matrix_to_euler,
     planning_box_corners_in_encoding_m,
+    cm_to_m,
+    localizer_image_plane_geometry,
 )
 
 log = logger.get_logger()
@@ -101,6 +103,10 @@ class ViewerWidget(QWidget):
         # (Axial / Coronal / Sagittal).
         self.planning_orientation = None
 
+        # Physical scanner-space center plane of the currently
+        # displayed Localizer image.
+        self.planning_image_plane = None
+
         self.fov_basis_items = []
 
         # Orientation of the target 3D GRE protocol
@@ -154,6 +160,9 @@ class ViewerWidget(QWidget):
         self.shim_roi = None
         self.fov_label = None
         self.shim_label = None
+
+        # Plane geometry belongs to the currently loaded image.
+        self.planning_image_plane = None
 
         self._planning_interactions.clear()
 
@@ -325,61 +334,31 @@ class ViewerWidget(QWidget):
 
         viewer_normal is the scanner-space normal of
         the displayed viewer plane.
+
+        Both come from the explicit scanner-space
+        ImagePlaneGeometry of the loaded Localizer
+        image rather than from a hard-coded table.
         """
 
         if (
-            self.planning_orientation
-            == "Axial"
+            self.planning_image_plane
+            is None
         ):
-            plane_projection = np.array(
-                [
-                    [1.0, 0.0, 0.0],
-                    [0.0, 1.0, 0.0],
-                ],
-                dtype=float,
-            )
-
-            viewer_normal = np.array(
-                [0.0, 0.0, 1.0],
-                dtype=float,
-            )
-
-        elif (
-            self.planning_orientation
-            == "Coronal"
-        ):
-            plane_projection = np.array(
-                [
-                    [1.0, 0.0, 0.0],
-                    [0.0, 0.0, 1.0],
-                ],
-                dtype=float,
-            )
-
-            viewer_normal = np.array(
-                [0.0, 1.0, 0.0],
-                dtype=float,
-            )
-
-        elif (
-            self.planning_orientation
-            == "Sagittal"
-        ):
-            plane_projection = np.array(
-                [
-                    [0.0, 1.0, 0.0],
-                    [0.0, 0.0, 1.0],
-                ],
-                dtype=float,
-            )
-
-            viewer_normal = np.array(
-                [1.0, 0.0, 0.0],
-                dtype=float,
-            )
-
-        else:
             return None, None
+
+        plane_projection = np.vstack(
+            [
+                self.planning_image_plane
+                .horizontal_scanner,
+                self.planning_image_plane
+                .vertical_scanner,
+            ]
+        )
+
+        viewer_normal = (
+            self.planning_image_plane
+            .normal_scanner
+        )
 
         return (
             plane_projection,
@@ -2657,6 +2636,9 @@ class ViewerWidget(QWidget):
         self.planning_orientation = None
         self.planning_state = None
 
+        # Plane geometry belongs to the currently loaded image.
+        self.planning_image_plane = None
+
         self.fov_roi = None
         self.shim_roi = None
 
@@ -2681,6 +2663,59 @@ class ViewerWidget(QWidget):
 
         ds = pydicom.dcmread(lstFilesDCM[0])
         ConstPixelDims = (len(lstFilesDCM), int(ds.Rows), int(ds.Columns))
+
+        # -------------------------------------------------
+        # Explicit scanner-space center plane of this
+        # Localizer image.
+        #
+        # The physical source of truth is the scan task's
+        # planned FOV, NOT the DICOM spatial tags: the
+        # current Localizer DICOM spatial tags are not the
+        # planning geometry contract.
+        # -------------------------------------------------
+        self.planning_image_plane = None
+
+        if (
+            task is not None
+            and task.sequence == "localizer"
+            and self.planning_orientation is not None
+            and self.planning_state is not None
+        ):
+            try:
+                fov_cm = float(
+                    task.parameters["FOV"]
+                )
+
+                if not np.isfinite(fov_cm) or fov_cm <= 0:
+                    raise ValueError(
+                        "Invalid Localizer FOV"
+                    )
+
+                self.planning_image_plane = (
+                    localizer_image_plane_geometry(
+                        orientation=(
+                            self.planning_orientation
+                        ),
+                        fov_m=float(
+                            cm_to_m(fov_cm)
+                        ),
+                        rows=int(ds.Rows),
+                        columns=int(ds.Columns),
+                    )
+                )
+
+            except (
+                KeyError,
+                TypeError,
+                ValueError,
+            ):
+                log.warning(
+                    "Localizer image plane geometry "
+                    "unavailable: missing or invalid "
+                    "FOV in scan task parameters"
+                )
+
+                self.planning_image_plane = None
 
         row_spacing_mm = 1.0
         column_spacing_mm = 1.0
