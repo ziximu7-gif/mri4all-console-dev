@@ -59,7 +59,6 @@ from common.simulation.context import (
     Localizer2DSimulationContext,
 )
 from common.simulation.phantom import (
-    phantom_bounds_m,
     sample_phantom,
 )
 
@@ -278,24 +277,29 @@ def synthesize_localizer_kspace(
         raw.reshape(nsa, ny, nx)
 
     where nx (= n_read) are Read columns and ny (= n_phase) are Phase rows.
+    This output/raw contract is unchanged by the slice-selective model.
 
-    The Localizer is scanner-base: per ORIENTATION_CHANNELS the read axis
-    is ch0 and the phase axis is ch1, and the image plane is centered at
-    the isocenter. The RF is NON-selective, so the third scanner axis (ch2)
-    is unencoded: each in-plane pixel is the deterministic summation
-    (projection) of the SAME fixed 3D phantom along ch2 over a range that
-    fully contains the object.
+    The Localizer is scanner-base and centered at isocenter: per
+    ORIENTATION_CHANNELS the read axis is ch0 and the phase axis is
+    ch1, while ch2 is the SLICE-SELECT axis. The excited slab is a
+    finite slice centered on the isocenter (slice coordinate 0), and
+    the signal is integrated only over ``slice_thickness_m``.
+
+    Phase A approximates the slice profile as an ideal rectangular
+    (boxcar) profile - a geometry-level stand-in for the real
+    slice-selective sinc RF plus slice gradient. No Bloch simulation
+    is performed and no Pulseq waveform is read back.
 
     The 2D centered image -> k-space uses ifftshift(ifft2(ifftshift(img)))
     matching run_reconstruction_localizer2d's fftshift(fft2(fftshift(.))).
     """
-    read_axis, phase_axis, proj_axis = ORIENTATION_CHANNELS[
+    read_axis, phase_axis, slice_axis = ORIENTATION_CHANNELS[
         ctx.orientation
     ]
     axis_index = {"x": 0, "y": 1, "z": 2}
     read_dim = axis_index[read_axis]
     phase_dim = axis_index[phase_axis]
-    proj_dim = axis_index[proj_axis]
+    slice_dim = axis_index[slice_axis]
 
     n_read = ctx.n_read
     n_phase = ctx.n_phase
@@ -310,17 +314,23 @@ def synthesize_localizer_kspace(
         n_phase, ctx.fov_m, n_phase // 2
     )
 
-    # Projection range along the unencoded axis must contain the whole
-    # fixed object.
-    lo_corner, hi_corner = phantom_bounds_m()
-    margin = 0.05 * float(np.max(hi_corner - lo_corner))
-    proj_lo = lo_corner[proj_dim] - margin
-    proj_hi = hi_corner[proj_dim] + margin
-    proj_c = np.linspace(
-        proj_lo, proj_hi, ctx.n_projection, dtype=float
+    # Finite slice centered at scanner isocenter: the slice-select
+    # coordinate spans -slice_thickness/2 .. +slice_thickness/2. The
+    # Localizer slice is centered by construction (no slice offset),
+    # so the slab is symmetric about coordinate 0.
+    slice_half = (
+        0.5
+        * ctx.slice_thickness_m
     )
 
-    # Build (phase, read, projection) scanner coordinate grids.
+    slice_c = np.linspace(
+        -slice_half,
+        slice_half,
+        ctx.n_slice_samples,
+        dtype=float,
+    )
+
+    # Build (phase, read, slice) scanner coordinate grids.
     # Raw contract: raw.reshape(nsa, ny, nx) with ny = Phase rows and
     # nx = Read columns (run_reconstruction_localizer2d).
     image = np.zeros((n_phase, n_read), dtype=np.complex128)
@@ -330,22 +340,47 @@ def synthesize_localizer_kspace(
     )  # shape (n_phase, n_read): rr varies along columns,
     # pph along rows.
 
-    # Sum the phantom along the unencoded projection axis using the
+    # Integrate the phantom through the finite slice only, using the
     # trapezoidal rule (endpoint half weights) - a deterministic
-    # numerical integration.
-    proj_spacing = float(proj_hi - proj_lo) / max(
-        ctx.n_projection - 1, 1
+    # numerical integration. Phase A treats the slice profile as an
+    # ideal rectangular (boxcar) profile.
+    slice_spacing = (
+        ctx.slice_thickness_m
+        / (ctx.n_slice_samples - 1)
     )
-    for sample, pval in enumerate(proj_c):
+
+    for sample, slice_position in enumerate(
+        slice_c
+    ):
         points = np.zeros(
-            (n_phase, n_read, 3), dtype=float
+            (n_phase, n_read, 3),
+            dtype=float,
         )
+
         points[:, :, read_dim] = rr
         points[:, :, phase_dim] = pph
-        points[:, :, proj_dim] = pval
-        weight = 0.5 if sample in (0, len(proj_c) - 1) else 1.0
-        image += weight * sample_phantom(points)
-    image = image * proj_spacing
+        points[:, :, slice_dim] = (
+            slice_position
+        )
+
+        weight = (
+            0.5
+            if sample in (
+                0,
+                len(slice_c) - 1,
+            )
+            else 1.0
+        )
+
+        image += (
+            weight
+            * sample_phantom(points)
+        )
+
+    image = (
+        image
+        * slice_spacing
+    )
 
     # Centered image -> k-space (flat stream, NSA=1 row repeated).
     kspace = np.fft.ifftshift(

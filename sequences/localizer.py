@@ -16,17 +16,20 @@ from sequences.common import view_sequence
 import common.logger as logger
 from common.types import ResultItem
 import common.config as config
-from common.geometry import cm_to_m
+from common.geometry import (
+    cm_to_m,
+    mm_to_m,
+)
 from common.simulation import (
     Localizer2DSimulationContext,
 )
 
 log = logger.get_logger()
 
-# Number of integration samples along the unencoded projection axis
-# for the Localizer hardware simulation (deterministic summation of
-# the fixed scanner-space phantom).
-LOCALIZER_SIMULATION_PROJECTION_SAMPLES = 161
+# Number of integration samples through the finite Localizer slice
+# for the hardware simulation (deterministic summation of the fixed
+# scanner-space phantom).
+LOCALIZER_SIMULATION_SLICE_SAMPLES = 161
 
 
 class SequenceSE_2D(PulseqSequence, registry_key=Path(__file__).stem):
@@ -352,12 +355,10 @@ class SequenceSE_2D(PulseqSequence, registry_key=Path(__file__).stem):
         """
         Adapter layer for the Localizer hardware simulation.
 
-        Builds the typed projection context from plain numerical
-        values only (the pure common/simulation layer must not know
-        ScanTask persistence). The Localizer is scanner-base and
-        centered at the isocenter; its RF is non-selective, so the
-        third scanner axis is unencoded and the image is a projection
-        of the same fixed 3D phantom along that axis.
+        The Localizer is scanner-base and centered at isocenter.
+        The third orientation channel is the slice-select axis.
+        The Phase-A simulator models an ideal finite rectangular
+        slice profile with the configured slice thickness.
         """
         return Localizer2DSimulationContext(
             kind="localizer2d",
@@ -365,11 +366,16 @@ class SequenceSE_2D(PulseqSequence, registry_key=Path(__file__).stem):
             fov_m=float(
                 cm_to_m(self.param_FOV)
             ),
+            slice_thickness_m=float(
+                mm_to_m(
+                    self.param_Slice_Thickness
+                )
+            ),
             n_read=int(self.param_Base_Resolution),
             n_phase=int(self.param_Base_Resolution),
             nsa=int(self.param_NSA),
-            n_projection=(
-                LOCALIZER_SIMULATION_PROJECTION_SAMPLES
+            n_slice_samples=(
+                LOCALIZER_SIMULATION_SLICE_SAMPLES
             ),
         )
 

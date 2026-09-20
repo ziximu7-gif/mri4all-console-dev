@@ -301,34 +301,49 @@ def test_translation_roundtrip_matches_shifted_sampling():
 
 
 # =====================================================================
-# 7. Localizer: three views from the SAME fixed 3D phantom (projection)
+# 7. Localizer: three views from the SAME fixed 3D phantom
+#    through a centered finite slice (ideal boxcar slice profile)
 # =====================================================================
 
 
-def _independent_localizer_projection(orientation, n_read, n_phase, fov_m, n_proj):
-    """Clean-room verifier: project sample_phantom along the unencoded axis."""
-    read_axis, phase_axis, proj_axis = ORIENTATION_CHANNELS[orientation]
+def _independent_localizer_slice(
+    orientation,
+    n_read,
+    n_phase,
+    fov_m,
+    slice_thickness_m,
+    n_slice_samples,
+):
+    """Clean-room verifier: integrate sample_phantom through a centered
+    finite slice on the slice-select axis.
+
+    This never calls synthesize_localizer_kspace; it rebuilds the same
+    physical expectation directly from sample_phantom so a mistake in
+    the production integration loop cannot hide itself.
+    """
+    read_axis, phase_axis, slice_axis = ORIENTATION_CHANNELS[orientation]
     aidx = {"x": 0, "y": 1, "z": 2}
-    rd, pd, jd = aidx[read_axis], aidx[phase_axis], aidx[proj_axis]
-    lo, hi = phantom_bounds_m()
-    margin = 0.05 * float(np.max(hi - lo))
-    proj_lo = lo[jd] - margin
-    proj_hi = hi[jd] + margin
-    spacing = (proj_hi - proj_lo) / (n_proj - 1)
-    proj_c = np.linspace(proj_lo, proj_hi, n_proj)
+    rd, pd, sd = aidx[read_axis], aidx[phase_axis], aidx[slice_axis]
+
+    # Slice centered at isocenter: -thickness/2 .. +thickness/2.
+    slice_half = 0.5 * slice_thickness_m
+    slice_c = np.linspace(-slice_half, slice_half, n_slice_samples)
+    spacing = slice_thickness_m / (n_slice_samples - 1)
 
     read_c = (np.arange(n_read) - n_read // 2) * (fov_m / n_read)
     phase_c = (np.arange(n_phase) - n_phase // 2) * (fov_m / n_phase)
     rr, pph = np.meshgrid(read_c, phase_c, indexing="xy")  # (phase, read)
 
     img = np.zeros((n_phase, n_read))
-    for s, p in enumerate(proj_c):
+    for s, slice_pos in enumerate(slice_c):
         pts = np.zeros((n_phase, n_read, 3))
         pts[:, :, rd] = rr
         pts[:, :, pd] = pph
-        pts[:, :, jd] = p
-        w = 0.5 if s in (0, len(proj_c) - 1) else 1.0
+        pts[:, :, sd] = slice_pos
+        w = 0.5 if s in (0, len(slice_c) - 1) else 1.0
         img += w * sample_phantom(pts)
+    # Trapezoidal integration through the finite slice. Deliberately NOT
+    # divided by slice thickness: signal scales with slice thickness.
     return img * spacing
 
 
@@ -344,7 +359,8 @@ def test_localizer_raw_contract_and_shape():
     nsa, n = 1, 64
     ctx = Localizer2DSimulationContext(
         kind="localizer2d", orientation="Axial", fov_m=0.16,
-        n_read=n, n_phase=n, nsa=nsa, n_projection=161,
+        slice_thickness_m=0.010, n_slice_samples=161,
+        n_read=n, n_phase=n, nsa=nsa,
     )
     raw = synthesize_localizer_kspace(ctx)
     # Preserve raw.reshape(nsa, ny, nx) with ny=Phase, nx=Read.
@@ -353,26 +369,28 @@ def test_localizer_raw_contract_and_shape():
     assert reshaped.shape == (nsa, n, n)
 
 
-def test_localizer_three_views_same_phantom():
+def test_localizer_three_views_centered_slice():
     n = 48
     nsa = 1
     ctxs = {
         o: Localizer2DSimulationContext(
             kind="localizer2d", orientation=o, fov_m=0.16,
-            n_read=n, n_phase=n, nsa=nsa, n_projection=161,
+            slice_thickness_m=0.010, n_slice_samples=161,
+            n_read=n, n_phase=n, nsa=nsa,
         )
         for o in ("Axial", "Coronal", "Sagittal")
     }
     for orientation, ctx in ctxs.items():
         img = _localizer_image(ctx)
-        expected = _independent_localizer_projection(
-            orientation, ctx.n_read, ctx.n_phase, ctx.fov_m, ctx.n_projection
+        expected = _independent_localizer_slice(
+            orientation, ctx.n_read, ctx.n_phase, ctx.fov_m,
+            ctx.slice_thickness_m, ctx.n_slice_samples,
         )
-        # Each orientation is a projection of the SAME fixed phantom along
-        # its unencoded third axis.
+        # Each orientation is a centered finite slice of the SAME fixed
+        # phantom, integrated through its slice-select axis only.
         np.testing.assert_allclose(img, expected, atol=1e-9)
 
-    # The three views are genuinely different (distinct projection axes).
+    # The three views are genuinely different (distinct slice axes).
     imgA = _localizer_image(ctxs["Axial"])
     imgC = _localizer_image(ctxs["Coronal"])
     imgS = _localizer_image(ctxs["Sagittal"])
@@ -381,11 +399,97 @@ def test_localizer_three_views_same_phantom():
     assert not np.allclose(imgC, imgS)
 
 
-def test_localizer_uses_unencoded_projection_axis():
-    """ch2 is the projection axis per ORIENTATION_CHANNELS."""
+def test_localizer_uses_third_axis_as_slice_axis():
+    """ch2 is the slice-select axis per ORIENTATION_CHANNELS."""
     assert ORIENTATION_CHANNELS["Axial"] == ("x", "y", "z")
     assert ORIENTATION_CHANNELS["Coronal"] == ("x", "z", "y")
     assert ORIENTATION_CHANNELS["Sagittal"] == ("y", "z", "x")
+
+
+def test_localizer_centered_slice_is_not_full_axis_projection():
+    """Regression guard: the centered finite slice must NOT reproduce the
+    old full-axis projection.
+
+    phantom_bounds_m() is used ONLY inside this test to rebuild the old
+    behaviour; production kspace.py must not depend on it any more.
+    """
+    n = 48
+    ctx = Localizer2DSimulationContext(
+        kind="localizer2d", orientation="Axial", fov_m=0.16,
+        slice_thickness_m=0.010, n_slice_samples=161,
+        n_read=n, n_phase=n, nsa=1,
+    )
+
+    # Current behaviour: centered finite slice.
+    slice_kspace = synthesize_localizer_kspace(ctx)
+    slice_image = np.abs(
+        np.fft.fftshift(
+            np.fft.fft2(
+                np.fft.fftshift(
+                    slice_kspace.reshape(ctx.nsa, n, n)[0]
+                )
+            )
+        )
+    )
+
+    # OLD behaviour, rebuilt here with the same FFT convention.
+    read_axis, phase_axis, proj_axis = ORIENTATION_CHANNELS["Axial"]
+    aidx = {"x": 0, "y": 1, "z": 2}
+    rd, pd, jd = aidx[read_axis], aidx[phase_axis], aidx[proj_axis]
+    lo, hi = phantom_bounds_m()
+    margin = 0.05 * float(np.max(hi - lo))
+    proj_lo = lo[jd] - margin
+    proj_hi = hi[jd] + margin
+    proj_c = np.linspace(proj_lo, proj_hi, 161)
+    spacing = (proj_hi - proj_lo) / (len(proj_c) - 1)
+
+    read_c = (np.arange(n) - n // 2) * (ctx.fov_m / n)
+    phase_c = (np.arange(n) - n // 2) * (ctx.fov_m / n)
+    rr, pph = np.meshgrid(read_c, phase_c, indexing="xy")
+
+    full = np.zeros((n, n))
+    for s, p in enumerate(proj_c):
+        pts = np.zeros((n, n, 3))
+        pts[:, :, rd] = rr
+        pts[:, :, pd] = pph
+        pts[:, :, jd] = p
+        w = 0.5 if s in (0, len(proj_c) - 1) else 1.0
+        full += w * sample_phantom(pts)
+    full = full * spacing
+
+    full_kspace = np.fft.ifftshift(
+        np.fft.ifft2(np.fft.ifftshift(full))
+    )
+    full_projection_image = np.abs(
+        np.fft.fftshift(
+            np.fft.fft2(
+                np.fft.fftshift(full_kspace)
+            )
+        )
+    )
+
+    assert not np.allclose(
+        slice_image,
+        full_projection_image,
+    )
+
+
+def test_localizer_context_rejects_non_positive_slice_thickness():
+    with pytest.raises(ValueError):
+        Localizer2DSimulationContext(
+            kind="localizer2d", orientation="Axial", fov_m=0.16,
+            slice_thickness_m=0.0, n_slice_samples=161,
+            n_read=32, n_phase=32, nsa=1,
+        )
+
+
+def test_localizer_context_rejects_too_few_slice_samples():
+    with pytest.raises(ValueError):
+        Localizer2DSimulationContext(
+            kind="localizer2d", orientation="Axial", fov_m=0.16,
+            slice_thickness_m=0.010, n_slice_samples=1,
+            n_read=32, n_phase=32, nsa=1,
+        )
 
 
 # =====================================================================
@@ -557,7 +661,8 @@ def test_dispatch_localizer_context(monkeypatch, tmp_path):
     """An explicit Localizer2D context routes to the geometry-aware simulator."""
     ctx = Localizer2DSimulationContext(
         kind="localizer2d", orientation="Axial", fov_m=0.16,
-        n_read=64, n_phase=64, nsa=1, n_projection=161,
+        slice_thickness_m=0.010, n_slice_samples=161,
+        n_read=64, n_phase=64, nsa=1,
     )
     rxd, rx_t = _run_dispatch_with(
         monkeypatch, tmp_path, "localizer_0_Axial.seq",

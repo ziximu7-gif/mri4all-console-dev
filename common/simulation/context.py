@@ -114,24 +114,28 @@ class GRE3DSimulationContext:
 @dataclass(frozen=True)
 class Localizer2DSimulationContext:
     """
-    Geometry for one 2D Localizer projection simulation.
+    Geometry for one scanner-base 2D Localizer acquisition.
 
-    The Localizer is scanner-base (no FOV rotation): the imaging plane is
-    aligned with scanner axes per ORIENTATION_CHANNELS, centered at the
-    isocenter, with a square Read x Phase FOV. Because the current
-    Localizer sequence uses non-selective block RF pulses (Read + Phase
-    encoding only, no slice-selective excitation), the third scanner axis
-    is unencoded and the image is a PROJECTION (deterministic summation)
-    of the same fixed 3D phantom along that axis.
+    Read and Phase axes come from ORIENTATION_CHANNELS; the third axis
+    is the SLICE-SELECT axis. The slice is centered at scanner
+    isocenter (slice coordinate 0) and the signal is integrated only
+    through the finite ``slice_thickness_m`` around that center, so the
+    image is a thin reconstructed slice - NOT a full-axis projection.
+
+    Phase A models the slice profile as an ideal rectangular (boxcar)
+    profile: a geometry-level approximation of the real slice-selective
+    sinc RF plus slice gradient, with no Bloch simulation and no Pulseq
+    waveform readback.
     """
 
     kind: str
     orientation: str
     fov_m: float
+    slice_thickness_m: float
     n_read: int
     n_phase: int
     nsa: int
-    n_projection: int
+    n_slice_samples: int
 
     def __post_init__(self):
         if self.fov_m <= 0:
@@ -142,7 +146,11 @@ class Localizer2DSimulationContext:
             )
         if self.nsa <= 0:
             raise ValueError("Localizer NSA must be positive")
-        if self.n_projection <= 0:
+        if self.slice_thickness_m <= 0:
             raise ValueError(
-                "Localizer projection samples must be positive"
+                "Localizer slice thickness must be positive"
+            )
+        if self.n_slice_samples < 2:
+            raise ValueError(
+                "Localizer slice samples must be at least 2"
             )
