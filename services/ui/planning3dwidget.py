@@ -13,6 +13,7 @@ from PyQt5.QtWidgets import (
 )
 
 from PyQt5.QtGui import (
+    QVector3D,
     QVector4D,
     QKeySequence,
 )
@@ -45,6 +46,29 @@ class Planning3DWidget(QWidget):
     HOME_CAMERA_DISTANCE_M = 0.45
     HOME_CAMERA_ELEVATION_DEG = 20.0
     HOME_CAMERA_AZIMUTH_DEG = 45.0
+
+    # Orthogonal preset views.
+    #
+    # Scanner channel convention:
+    #
+    #   Axial     = XY plane, normal Z
+    #   Coronal   = XZ plane, normal Y
+    #   Sagittal  = YZ plane, normal X
+    #
+    # The angles below are derived from that geometry so
+    # that the on-screen axes match the 2D Localizer views:
+    #
+    #   AX   screen right = +X   screen up = +Y
+    #   COR  screen right = +X   screen up = +Z
+    #   SAG  screen right = +Y   screen up = +Z
+    AXIAL_CAMERA_ELEVATION_DEG = 90.0
+    AXIAL_CAMERA_AZIMUTH_DEG = -90.0
+
+    CORONAL_CAMERA_ELEVATION_DEG = 0.0
+    CORONAL_CAMERA_AZIMUTH_DEG = -90.0
+
+    SAGITTAL_CAMERA_ELEVATION_DEG = 0.0
+    SAGITTAL_CAMERA_AZIMUTH_DEG = 0.0
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -85,6 +109,86 @@ class Planning3DWidget(QWidget):
 
         camera_layout.addStretch(
             1
+        )
+
+        self.axial_button = (
+            QToolButton()
+        )
+
+        self.axial_button.setText(
+            "AX"
+        )
+
+        self.axial_button.setToolTip(
+            "Axial camera view"
+        )
+
+        self.axial_button.clicked.connect(
+            self.set_camera_axial
+        )
+
+        camera_layout.addWidget(
+            self.axial_button
+        )
+
+        self.coronal_button = (
+            QToolButton()
+        )
+
+        self.coronal_button.setText(
+            "COR"
+        )
+
+        self.coronal_button.setToolTip(
+            "Coronal camera view"
+        )
+
+        self.coronal_button.clicked.connect(
+            self.set_camera_coronal
+        )
+
+        camera_layout.addWidget(
+            self.coronal_button
+        )
+
+        self.sagittal_button = (
+            QToolButton()
+        )
+
+        self.sagittal_button.setText(
+            "SAG"
+        )
+
+        self.sagittal_button.setToolTip(
+            "Sagittal camera view"
+        )
+
+        self.sagittal_button.clicked.connect(
+            self.set_camera_sagittal
+        )
+
+        camera_layout.addWidget(
+            self.sagittal_button
+        )
+
+        self.iso_button = (
+            QToolButton()
+        )
+
+        self.iso_button.setText(
+            "ISO"
+        )
+
+        self.iso_button.setToolTip(
+            "Isometric camera view"
+        )
+
+        self.iso_button.clicked.connect(
+            self.set_camera_iso
+        )
+
+        camera_layout.addWidget(
+            self.iso_button
         )
 
         self.home_button = (
@@ -192,6 +296,95 @@ class Planning3DWidget(QWidget):
     # =====================================================
     # Camera
     # =====================================================
+
+    def _set_camera_view(
+        self,
+        elevation_deg,
+        azimuth_deg,
+    ):
+        """
+        Set a scanner-space camera orientation.
+
+        Preset views recenter on scanner isocenter but preserve
+        the user's current zoom/distance and field of view.
+
+        This changes only the camera and never PlanningState.
+        """
+
+        self.view.setCameraPosition(
+            pos=QVector3D(
+                0.0,
+                0.0,
+                0.0,
+            ),
+            elevation=float(
+                elevation_deg
+            ),
+            azimuth=float(
+                azimuth_deg
+            ),
+        )
+
+    def set_camera_axial(
+        self,
+    ):
+        """
+        Look along the Localizer Axial normal.
+
+        Screen:
+            right = scanner +X
+            up    = scanner +Y
+        """
+
+        self._set_camera_view(
+            self.AXIAL_CAMERA_ELEVATION_DEG,
+            self.AXIAL_CAMERA_AZIMUTH_DEG,
+        )
+
+    def set_camera_coronal(
+        self,
+    ):
+        """
+        Look perpendicular to the Coronal X/Z plane.
+
+        Screen:
+            right = scanner +X
+            up    = scanner +Z
+        """
+
+        self._set_camera_view(
+            self.CORONAL_CAMERA_ELEVATION_DEG,
+            self.CORONAL_CAMERA_AZIMUTH_DEG,
+        )
+
+    def set_camera_sagittal(
+        self,
+    ):
+        """
+        Look perpendicular to the Sagittal Y/Z plane.
+
+        Screen:
+            right = scanner +Y
+            up    = scanner +Z
+        """
+
+        self._set_camera_view(
+            self.SAGITTAL_CAMERA_ELEVATION_DEG,
+            self.SAGITTAL_CAMERA_AZIMUTH_DEG,
+        )
+
+    def set_camera_iso(
+        self,
+    ):
+        """
+        Restore the standard oblique orientation while
+        preserving the current zoom.
+        """
+
+        self._set_camera_view(
+            self.HOME_CAMERA_ELEVATION_DEG,
+            self.HOME_CAMERA_AZIMUTH_DEG,
+        )
 
     def reset_camera(
         self,
