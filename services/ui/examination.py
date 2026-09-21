@@ -1475,6 +1475,55 @@ class ExaminationWindow(QMainWindow):
 
             planning3d.clear_planning_context()
 
+    def _refresh_planning3d_localizer_images(
+        self,
+    ):
+        """
+        Collect physical Localizer images from the three
+        2D viewers and hand them to the 3D planning view.
+
+        The 3D widget does not read DICOM itself.
+        """
+
+        planning3d = getattr(
+            self,
+            "planning3d",
+            None,
+        )
+
+        if planning3d is None:
+            return
+
+        plane_images = []
+
+        for viewer in (
+            self.viewer1,
+            self.viewer2,
+            self.viewer3,
+        ):
+            plane_image = (
+                viewer
+                .get_localizer_plane_image()
+            )
+
+            if plane_image is not None:
+                plane_images.append(
+                    plane_image
+                )
+
+        try:
+            planning3d.set_localizer_images(
+                plane_images
+            )
+
+        except ValueError as exc:
+            log.warning(
+                "Unable to update 3D Localizer textures: "
+                + str(
+                    exc
+                )
+            )
+
     def refresh_planning_boxes(self):
         """
         One viewer changed the shared Box3D.
@@ -2109,6 +2158,14 @@ class ExaminationWindow(QMainWindow):
                 result_item.type,
                 scan_task,
             )
+
+            if (
+                scan_task.sequence
+                == "localizer"
+                and result_item.type
+                == "dicom"
+            ):
+                self._refresh_planning3d_localizer_images()
         elif target_viewer == "flex":
             self.show_result_in_flex_viewer(
                 scan_path,
@@ -2272,6 +2329,12 @@ class ExaminationWindow(QMainWindow):
                 continue
             else:
                 log.warning("Invalid target viewer provided")
+
+        if (
+            scan_task.sequence
+            == "localizer"
+        ):
+            self._refresh_planning3d_localizer_images()
 
     def queue_selection_changed(self):
         index = self.queueWidget.currentRow()
