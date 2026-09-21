@@ -326,8 +326,8 @@ class ExaminationWindow(QMainWindow):
         #
         # This is intentionally NOT a ViewerWidget: the 2D
         # viewers own DICOM/image coordinates while this slot
-        # owns scanner XYZ. It is read-only for now and not
-        # yet connected to planning_changed / PlanningState.
+        # owns scanner XYZ. It shares PlanningState with the
+        # three 2D Localizer viewers.
         # -----------------------------------------------------
 
         viewer4Layout = QHBoxLayout(self.viewer4Frame)
@@ -349,6 +349,10 @@ class ExaminationWindow(QMainWindow):
         )
 
         self.viewer3.planning_changed.connect(
+            self.refresh_planning_boxes
+        )
+
+        self.planning3d.planning_changed.connect(
             self.refresh_planning_boxes
         )
 
@@ -1552,7 +1556,10 @@ class ExaminationWindow(QMainWindow):
             None,
         )
 
-        if planning3d is not None:
+        if (
+            planning3d is not None
+            and planning3d is not source_viewer
+        ):
             planning3d.refresh_planning_geometry()
 
         log.debug(

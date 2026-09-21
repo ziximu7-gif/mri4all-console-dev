@@ -2,6 +2,7 @@ import numpy as np
 
 from PyQt5.QtCore import (
     Qt,
+    pyqtSignal,
 )
 
 from PyQt5.QtWidgets import (
@@ -10,6 +11,7 @@ from PyQt5.QtWidgets import (
     QHBoxLayout,
     QToolButton,
     QShortcut,
+    QComboBox,
 )
 
 from PyQt5.QtGui import (
@@ -24,12 +26,14 @@ import pyqtgraph.opengl as gl
 from common.geometry import (
     planning_box_to_scan_geometry,
     scan_geometry_box_edges_scanner_m,
+    planning_euler_to_matrix,
+    planning_matrix_to_euler,
 )
 
 
 class Planning3DWidget(QWidget):
     """
-    Read-only 3D scanner-space planning viewer.
+    3D scanner-space planning viewer.
 
     Coordinate convention:
         X = scanner X
@@ -39,13 +43,26 @@ class Planning3DWidget(QWidget):
     Scene coordinates are meters, matching common.geometry.
 
     The widget does not own planning geometry.
-    It displays the shared PlanningState supplied by
-    ExaminationWindow.
+    It displays and edits the shared PlanningState supplied
+    by ExaminationWindow.
     """
+
+    # Emitted after this widget changed the shared
+    # PlanningState, so every other planning view can
+    # refresh from the SAME object.
+    planning_changed = pyqtSignal()
 
     HOME_CAMERA_DISTANCE_M = 0.45
     HOME_CAMERA_ELEVATION_DEG = 20.0
     HOME_CAMERA_AZIMUTH_DEG = 45.0
+
+    # FOV operation steps.
+    #
+    # Box3D center coordinates are normalized scanner
+    # X/Y/Z, so a 0.01 step is 1% of the reference FOV
+    # (about 2 mm for a 20 cm Localizer FOV).
+    FOV_TRANSLATION_STEP_NORM = 0.01
+    FOV_ROTATION_STEP_DEG = 5.0
 
     # Orthogonal preset views.
     #
@@ -213,6 +230,130 @@ class Planning3DWidget(QWidget):
 
         layout.addLayout(
             camera_layout
+        )
+
+        # -------------------------------------------------
+        # FOV planning controls
+        # -------------------------------------------------
+
+        planning_layout = QHBoxLayout()
+
+        planning_layout.setContentsMargins(
+            4,
+            2,
+            4,
+            2,
+        )
+
+        planning_layout.setSpacing(
+            4
+        )
+
+        planning_layout.addStretch(
+            1
+        )
+
+        self.fov_action_combo = (
+            QComboBox()
+        )
+
+        self.fov_action_combo.addItems(
+            [
+                "MOVE",
+                "ROT",
+            ]
+        )
+
+        self.fov_action_combo.setToolTip(
+            "3D FOV operation"
+        )
+
+        self.fov_action_combo.setMinimumWidth(
+            76
+        )
+
+        self.fov_action_combo.view().setMinimumWidth(
+            76
+        )
+
+        planning_layout.addWidget(
+            self.fov_action_combo
+        )
+
+        self.fov_axis_combo = (
+            QComboBox()
+        )
+
+        self.fov_axis_combo.addItems(
+            [
+                "X",
+                "Y",
+                "Z",
+            ]
+        )
+
+        self.fov_axis_combo.setToolTip(
+            "Scanner axis"
+        )
+
+        self.fov_axis_combo.setMinimumWidth(
+            54
+        )
+
+        self.fov_axis_combo.view().setMinimumWidth(
+            54
+        )
+
+        planning_layout.addWidget(
+            self.fov_axis_combo
+        )
+
+        self.fov_minus_button = (
+            QToolButton()
+        )
+
+        self.fov_minus_button.setText(
+            "-"
+        )
+
+        self.fov_minus_button.setToolTip(
+            "Move or rotate FOV in negative direction"
+        )
+
+        self.fov_minus_button.clicked.connect(
+            lambda: self._nudge_fov(
+                -1.0
+            )
+        )
+
+        planning_layout.addWidget(
+            self.fov_minus_button
+        )
+
+        self.fov_plus_button = (
+            QToolButton()
+        )
+
+        self.fov_plus_button.setText(
+            "+"
+        )
+
+        self.fov_plus_button.setToolTip(
+            "Move or rotate FOV in positive direction"
+        )
+
+        self.fov_plus_button.clicked.connect(
+            lambda: self._nudge_fov(
+                1.0
+            )
+        )
+
+        planning_layout.addWidget(
+            self.fov_plus_button
+        )
+
+        layout.addLayout(
+            planning_layout
         )
 
         layout.addWidget(
@@ -427,6 +568,204 @@ class Planning3DWidget(QWidget):
                 self.HOME_CAMERA_AZIMUTH_DEG
             ),
         )
+
+    # =====================================================
+    # 3D FOV interaction
+    # =====================================================
+
+    def _translate_fov_scanner_axis(
+        self,
+        axis,
+        direction,
+    ):
+        """
+        Translate the planned FOV along one scanner axis.
+
+        Box3D center coordinates are normalized scanner
+        X/Y/Z coordinates.
+        """
+
+        if self.planning_state is None:
+            return
+
+        box = (
+            self.planning_state
+            .fov_box
+        )
+
+        step = (
+            float(direction)
+            * self.FOV_TRANSLATION_STEP_NORM
+        )
+
+        attribute = (
+            "center_"
+            + str(axis).lower()
+        )
+
+        setattr(
+            box,
+            attribute,
+            float(
+                getattr(
+                    box,
+                    attribute,
+                )
+            )
+            + step,
+        )
+
+        box.clamp()
+
+    def _rotate_fov_scanner_axis(
+        self,
+        axis,
+        direction,
+    ):
+        """
+        Rotate the planned FOV around a scanner/global axis.
+
+        The incremental scanner rotation is pre-multiplied:
+
+            R_new = delta_R @ R_current
+
+        This preserves the repository Euler convention while
+        giving the UI a true scanner-axis rotation.
+        """
+
+        if self.planning_state is None:
+            return
+
+        box = (
+            self.planning_state
+            .fov_box
+        )
+
+        angle_deg = (
+            float(direction)
+            * self.FOV_ROTATION_STEP_DEG
+        )
+
+        current_rotation = (
+            planning_euler_to_matrix(
+                float(
+                    box.rotation_x
+                ),
+                float(
+                    box.rotation_y
+                ),
+                float(
+                    box.rotation_z
+                ),
+            )
+        )
+
+        if axis == "X":
+
+            delta_rotation = (
+                planning_euler_to_matrix(
+                    angle_deg,
+                    0.0,
+                    0.0,
+                )
+            )
+
+        elif axis == "Y":
+
+            delta_rotation = (
+                planning_euler_to_matrix(
+                    0.0,
+                    angle_deg,
+                    0.0,
+                )
+            )
+
+        elif axis == "Z":
+
+            delta_rotation = (
+                planning_euler_to_matrix(
+                    0.0,
+                    0.0,
+                    angle_deg,
+                )
+            )
+
+        else:
+            return
+
+        new_rotation = (
+            delta_rotation
+            @ current_rotation
+        )
+
+        (
+            rotation_x,
+            rotation_y,
+            rotation_z,
+        ) = planning_matrix_to_euler(
+            new_rotation
+        )
+
+        box.rotation_x = float(
+            rotation_x
+        )
+
+        box.rotation_y = float(
+            rotation_y
+        )
+
+        box.rotation_z = float(
+            rotation_z
+        )
+
+        box.clamp()
+
+    def _nudge_fov(
+        self,
+        direction,
+    ):
+        """
+        Apply one toolbar FOV operation and notify all
+        planning views through the shared PlanningState.
+        """
+
+        if self.planning_state is None:
+            return
+
+        action = (
+            self.fov_action_combo
+            .currentText()
+        )
+
+        axis = (
+            self.fov_axis_combo
+            .currentText()
+        )
+
+        if action == "MOVE":
+
+            self._translate_fov_scanner_axis(
+                axis,
+                direction,
+            )
+
+        elif action == "ROT":
+
+            self._rotate_fov_scanner_axis(
+                axis,
+                direction,
+            )
+
+        else:
+            return
+
+        # Update this viewer immediately.
+        self.refresh_planning_geometry()
+
+        # ExaminationWindow will refresh all three
+        # Localizer planning views from the SAME
+        # PlanningState object.
+        self.planning_changed.emit()
 
     # =====================================================
     # Static scanner reference
