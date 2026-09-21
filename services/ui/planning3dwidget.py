@@ -1,12 +1,20 @@
 import numpy as np
 
+from PyQt5.QtCore import (
+    Qt,
+)
+
 from PyQt5.QtWidgets import (
     QWidget,
     QVBoxLayout,
+    QHBoxLayout,
+    QToolButton,
+    QShortcut,
 )
 
 from PyQt5.QtGui import (
     QVector4D,
+    QKeySequence,
 )
 
 from pyqtgraph import Transform3D
@@ -34,6 +42,10 @@ class Planning3DWidget(QWidget):
     ExaminationWindow.
     """
 
+    HOME_CAMERA_DISTANCE_M = 0.45
+    HOME_CAMERA_ELEVATION_DEG = 20.0
+    HOME_CAMERA_AZIMUTH_DEG = 45.0
+
     def __init__(self, parent=None):
         super().__init__(parent)
 
@@ -54,8 +66,71 @@ class Planning3DWidget(QWidget):
             (0, 0, 0, 255)
         )
 
+        # -------------------------------------------------
+        # Camera controls
+        # -------------------------------------------------
+
+        camera_layout = QHBoxLayout()
+
+        camera_layout.setContentsMargins(
+            4,
+            2,
+            4,
+            2,
+        )
+
+        camera_layout.setSpacing(
+            4
+        )
+
+        camera_layout.addStretch(
+            1
+        )
+
+        self.home_button = (
+            QToolButton()
+        )
+
+        self.home_button.setText(
+            "HOME"
+        )
+
+        self.home_button.setToolTip(
+            "Reset 3D camera (Home)"
+        )
+
+        self.home_button.clicked.connect(
+            self.reset_camera
+        )
+
+        camera_layout.addWidget(
+            self.home_button
+        )
+
+        layout.addLayout(
+            camera_layout
+        )
+
         layout.addWidget(
-            self.view
+            self.view,
+            1,
+        )
+
+        self.home_shortcut = (
+            QShortcut(
+                QKeySequence(
+                    Qt.Key_Home
+                ),
+                self,
+            )
+        )
+
+        self.home_shortcut.setContext(
+            Qt.WidgetWithChildrenShortcut
+        )
+
+        self.home_shortcut.activated.connect(
+            self.reset_camera
         )
 
         # -------------------------------------------------
@@ -109,17 +184,56 @@ class Planning3DWidget(QWidget):
             self.fov_wireframe_item
         )
 
-        # Camera looks toward scanner isocenter.
-        #
-        # Scene units are meters. Current Localizer FOV is
-        # around 0.20 m, so 0.45 m gives a useful initial view.
-        self.view.setCameraPosition(
-            distance=0.45,
-            elevation=20,
-            azimuth=45,
-        )
+        # Start from the same camera state used by HOME.
+        self.reset_camera()
 
         self._create_scanner_axes()
+
+    # =====================================================
+    # Camera
+    # =====================================================
+
+    def reset_camera(
+        self,
+    ):
+        """
+        Restore the standard scanner-space 3D camera.
+
+        This changes only the camera. It never changes
+        PlanningState or any scan-planning geometry.
+        """
+
+        # GLViewWidget.reset() restores:
+        #
+        #   center = scanner origin
+        #   FOV = 60 degrees
+        #   viewport = default
+        #
+        # It also resets distance/orientation to pyqtgraph
+        # defaults, which are overridden immediately below
+        # by our planning-view home camera.
+        self.view.reset()
+
+        self.view.setBackgroundColor(
+            (
+                0,
+                0,
+                0,
+                255,
+            )
+        )
+
+        self.view.setCameraPosition(
+            distance=(
+                self.HOME_CAMERA_DISTANCE_M
+            ),
+            elevation=(
+                self.HOME_CAMERA_ELEVATION_DEG
+            ),
+            azimuth=(
+                self.HOME_CAMERA_AZIMUTH_DEG
+            ),
+        )
 
     # =====================================================
     # Static scanner reference
