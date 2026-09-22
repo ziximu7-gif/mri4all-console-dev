@@ -520,6 +520,30 @@ class Planning3DWidget(QWidget):
         ),
     )
 
+    FOV_MOVE_HANDLE_SPECS = (
+        (
+            "move_x",
+            np.array(
+                [1.0, 0.0, 0.0],
+                dtype=float,
+            ),
+        ),
+        (
+            "move_y",
+            np.array(
+                [0.0, 1.0, 0.0],
+                dtype=float,
+            ),
+        ),
+        (
+            "move_z",
+            np.array(
+                [0.0, 0.0, 1.0],
+                dtype=float,
+            ),
+        ),
+    )
+
     def __init__(self, parent=None):
         super().__init__(parent)
 
@@ -543,7 +567,7 @@ class Planning3DWidget(QWidget):
         )
 
         self.view.planning_handle_dragged.connect(
-            self._drag_fov_face_handle
+            self._drag_planning_handle
         )
 
         self.view.planning_handle_hovered.connect(
@@ -959,6 +983,75 @@ class Planning3DWidget(QWidget):
             self.fov_face_handle_items[
                 handle_id
             ] = item
+
+        self.fov_move_axis_items = {}
+        self.fov_move_handle_items = {}
+
+        for (
+            handle_id,
+            scanner_axis,
+        ) in self.FOV_MOVE_HANDLE_SPECS:
+
+            axis_item = (
+                gl.GLLinePlotItem(
+                    pos=np.zeros(
+                        (2, 3),
+                        dtype=float,
+                    ),
+                    color=(
+                        1.0,
+                        1.0,
+                        1.0,
+                        0.75,
+                    ),
+                    width=3,
+                    antialias=True,
+                    mode="lines",
+                )
+            )
+
+            axis_item.hide()
+
+            self.view.addItem(
+                axis_item
+            )
+
+            handle_item = (
+                gl.GLScatterPlotItem(
+                    pos=np.zeros(
+                        (1, 3),
+                        dtype=float,
+                    ),
+                    color=(
+                        1.0,
+                        1.0,
+                        1.0,
+                        1.0,
+                    ),
+                    size=14.0,
+                    pxMode=True,
+                    glOptions="translucent",
+                )
+            )
+
+            handle_item.hide()
+
+            self.view.addItem(
+                handle_item
+            )
+
+            self.view.register_planning_handle(
+                handle_item,
+                handle_id,
+            )
+
+            self.fov_move_axis_items[
+                handle_id
+            ] = axis_item
+
+            self.fov_move_handle_items[
+                handle_id
+            ] = handle_item
 
         # Start from the same camera state used by HOME.
         self.reset_camera()
@@ -1392,6 +1485,34 @@ class Planning3DWidget(QWidget):
 
         return None
 
+    def _set_handle_visual(
+        self,
+        item,
+        hovered,
+    ):
+        if hovered:
+            item.setData(
+                color=(
+                    1.0,
+                    1.0,
+                    1.0,
+                    1.0,
+                ),
+                size=18.0,
+                pxMode=True,
+            )
+        else:
+            item.setData(
+                color=(
+                    1.0,
+                    0.75,
+                    0.0,
+                    1.0,
+                ),
+                size=14.0,
+                pxMode=True,
+            )
+
     def _hover_fov_handle(
         self,
         handle_id,
@@ -1407,32 +1528,60 @@ class Planning3DWidget(QWidget):
             self.fov_face_handle_items
             .items()
         ):
+            self._set_handle_visual(
+                item,
+                current_id == handle_id,
+            )
 
-            if current_id == handle_id:
+        for (
+            current_id,
+            item,
+        ) in (
+            self.fov_move_handle_items
+            .items()
+        ):
+            self._set_handle_visual(
+                item,
+                current_id == handle_id,
+            )
 
-                item.setData(
-                    color=(
-                        1.0,
-                        1.0,
-                        1.0,
-                        1.0,
-                    ),
-                    size=18.0,
-                    pxMode=True,
-                )
+    def _drag_planning_handle(
+        self,
+        handle_id,
+        delta_x_pixels,
+        delta_y_pixels,
+        symmetric_resize,
+    ):
+        """
+        Dispatch one direct-manipulation handle drag.
 
-            else:
+        Handle IDs describe UI semantics only; PlanningState
+        remains the single source of truth.
+        """
 
-                item.setData(
-                    color=(
-                        1.0,
-                        0.75,
-                        0.0,
-                        1.0,
-                    ),
-                    size=14.0,
-                    pxMode=True,
-                )
+        handle_id = str(
+            handle_id
+        )
+
+        if handle_id.startswith(
+            "face_"
+        ):
+            self._drag_fov_face_handle(
+                handle_id,
+                delta_x_pixels,
+                delta_y_pixels,
+                symmetric_resize,
+            )
+            return
+
+        if handle_id.startswith(
+            "move_"
+        ):
+            self._drag_fov_move_handle(
+                handle_id,
+                delta_x_pixels,
+                delta_y_pixels,
+            )
 
     def _project_scanner_point_to_widget(
         self,
@@ -1836,6 +1985,184 @@ class Planning3DWidget(QWidget):
 
         self.planning_changed.emit()
 
+    def _move_handle_axis(
+        self,
+        handle_id,
+    ):
+        for (
+            current_id,
+            scanner_axis,
+        ) in self.FOV_MOVE_HANDLE_SPECS:
+
+            if current_id == handle_id:
+                return np.asarray(
+                    scanner_axis,
+                    dtype=float,
+                )
+
+        return None
+
+    def _drag_fov_move_handle(
+        self,
+        handle_id,
+        delta_x_pixels,
+        delta_y_pixels,
+    ):
+        """
+        Translate the complete planned FOV along one scanner
+        X/Y/Z axis using the projected screen direction of
+        that axis.
+        """
+
+        if (
+            self.planning_state is None
+            or self.reference_fov_m is None
+        ):
+            return
+
+        scanner_axis = (
+            self._move_handle_axis(
+                handle_id
+            )
+        )
+
+        if scanner_axis is None:
+            return
+
+        box = (
+            self.planning_state
+            .fov_box
+        )
+
+        reference_fov_m = np.full(
+            3,
+            float(
+                self.reference_fov_m
+            ),
+            dtype=float,
+        )
+
+        scan_geometry = (
+            planning_box_to_scan_geometry(
+                fov_box=(
+                    box.as_dict()
+                ),
+                reference_fov_mm=(
+                    reference_fov_m
+                    * 1000.0
+                ),
+            )
+        )
+
+        center = np.asarray(
+            scan_geometry.center_scanner_m,
+            dtype=float,
+        )
+
+        probe_length_m = 0.02
+
+        screen_center = (
+            self._project_scanner_point_to_widget(
+                center
+            )
+        )
+
+        screen_probe = (
+            self._project_scanner_point_to_widget(
+                center
+                + scanner_axis
+                * probe_length_m
+            )
+        )
+
+        if (
+            screen_center is None
+            or screen_probe is None
+        ):
+            return
+
+        screen_axis_vector = (
+            screen_probe
+            - screen_center
+        )
+
+        screen_axis_pixels = float(
+            np.linalg.norm(
+                screen_axis_vector
+            )
+        )
+
+        # Camera is looking almost exactly along this scanner
+        # axis, so 2D dragging cannot determine a stable amount.
+        if screen_axis_pixels < 1e-3:
+            return
+
+        screen_axis = (
+            screen_axis_vector
+            / screen_axis_pixels
+        )
+
+        mouse_delta = np.array(
+            [
+                float(
+                    delta_x_pixels
+                ),
+                float(
+                    delta_y_pixels
+                ),
+            ],
+            dtype=float,
+        )
+
+        constrained_pixels = float(
+            np.dot(
+                mouse_delta,
+                screen_axis,
+            )
+        )
+
+        pixels_per_meter = (
+            screen_axis_pixels
+            / probe_length_m
+        )
+
+        if (
+            not np.isfinite(
+                pixels_per_meter
+            )
+            or pixels_per_meter < 1e-6
+        ):
+            return
+
+        delta_m = (
+            constrained_pixels
+            / pixels_per_meter
+        )
+
+        center_delta_norm = (
+            delta_m
+            * scanner_axis
+            / reference_fov_m
+        )
+
+        box.center_x += float(
+            center_delta_norm[0]
+        )
+
+        box.center_y += float(
+            center_delta_norm[1]
+        )
+
+        box.center_z += float(
+            center_delta_norm[2]
+        )
+
+        box.clamp()
+
+        self.refresh_planning_geometry()
+
+        self.planning_changed.emit()
+
     def _nudge_fov(
         self,
         direction,
@@ -2019,6 +2346,18 @@ class Planning3DWidget(QWidget):
             item.hide()
 
         self.fov_face_handle_positions_scanner_m = {}
+
+        for item in (
+            self.fov_move_axis_items
+            .values()
+        ):
+            item.hide()
+
+        for item in (
+            self.fov_move_handle_items
+            .values()
+        ):
+            item.hide()
 
         self.view.clear_planning_handle_state()
 
@@ -2640,6 +2979,18 @@ class Planning3DWidget(QWidget):
             ):
                 item.hide()
 
+            for item in (
+                self.fov_move_axis_items
+                .values()
+            ):
+                item.hide()
+
+            for item in (
+                self.fov_move_handle_items
+                .values()
+            ):
+                item.hide()
+
             return
 
         if (
@@ -2651,6 +3002,18 @@ class Planning3DWidget(QWidget):
 
             for item in (
                 self.fov_face_handle_items
+                .values()
+            ):
+                item.hide()
+
+            for item in (
+                self.fov_move_axis_items
+                .values()
+            ):
+                item.hide()
+
+            for item in (
+                self.fov_move_handle_items
                 .values()
             ):
                 item.hide()
@@ -2801,5 +3164,62 @@ class Planning3DWidget(QWidget):
             )
 
             self.fov_face_handle_items[
+                handle_id
+            ].show()
+
+        move_handle_length_m = max(
+            0.025,
+            0.20
+            * float(
+                np.max(
+                    scan_geometry.fov_local_m
+                )
+            ),
+        )
+
+        for (
+            handle_id,
+            scanner_axis,
+        ) in self.FOV_MOVE_HANDLE_SPECS:
+
+            scanner_axis = np.asarray(
+                scanner_axis,
+                dtype=float,
+            )
+
+            endpoint = (
+                center
+                + scanner_axis
+                * move_handle_length_m
+            )
+
+            self.fov_move_axis_items[
+                handle_id
+            ].setData(
+                pos=np.asarray(
+                    [
+                        center,
+                        endpoint,
+                    ],
+                    dtype=float,
+                ),
+            )
+
+            self.fov_move_handle_items[
+                handle_id
+            ].setData(
+                pos=np.asarray(
+                    [
+                        endpoint
+                    ],
+                    dtype=float,
+                ),
+            )
+
+            self.fov_move_axis_items[
+                handle_id
+            ].show()
+
+            self.fov_move_handle_items[
                 handle_id
             ].show()
