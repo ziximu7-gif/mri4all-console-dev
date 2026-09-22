@@ -23,6 +23,15 @@ from PyQt5.QtGui import (
 from pyqtgraph import Transform3D
 import pyqtgraph.opengl as gl
 
+from OpenGL.GL import (
+    GL_DEPTH_TEST,
+    GL_BLEND,
+    GL_ALPHA_TEST,
+    GL_CULL_FACE,
+    GL_SRC_ALPHA,
+    GL_ONE_MINUS_SRC_ALPHA,
+)
+
 from common.geometry import (
     planning_box_to_scan_geometry,
     scan_geometry_box_corners_scanner_m,
@@ -30,6 +39,18 @@ from common.geometry import (
     planning_euler_to_matrix,
     planning_matrix_to_euler,
 )
+
+
+PLANNING_OVERLAY_GL_OPTIONS = {
+    GL_DEPTH_TEST: False,
+    GL_BLEND: True,
+    GL_ALPHA_TEST: False,
+    GL_CULL_FACE: False,
+    "glBlendFunc": (
+        GL_SRC_ALPHA,
+        GL_ONE_MINUS_SRC_ALPHA,
+    ),
+}
 
 
 class PlanningGLViewWidget(
@@ -892,6 +913,46 @@ class Planning3DWidget(QWidget):
         #
         # mode="lines" interprets each consecutive pair
         # of points as one independent line segment.
+        # Low-opacity x-ray representation.
+        #
+        # Depth testing is deliberately disabled so the complete
+        # planned FOV remains spatially understandable even when
+        # part of it lies behind a Localizer image plane.
+        self.fov_wireframe_ghost_item = (
+            gl.GLLinePlotItem(
+                pos=np.zeros(
+                    (24, 3),
+                    dtype=float,
+                ),
+                color=(
+                    1.0,
+                    1.0,
+                    0.0,
+                    0.22,
+                ),
+                width=2,
+                antialias=True,
+                mode="lines",
+                glOptions=(
+                    PLANNING_OVERLAY_GL_OPTIONS
+                ),
+            )
+        )
+
+        self.fov_wireframe_ghost_item.hide()
+
+        self.fov_wireframe_ghost_item.setDepthValue(
+            0
+        )
+
+        self.view.addItem(
+            self.fov_wireframe_ghost_item
+        )
+
+        # Depth-tested representation.
+        #
+        # This pass draws only the FOV portions that are visible in
+        # front of the Localizer image planes.
         self.fov_wireframe_item = (
             gl.GLLinePlotItem(
                 pos=np.zeros(
@@ -907,10 +968,15 @@ class Planning3DWidget(QWidget):
                 width=3,
                 antialias=True,
                 mode="lines",
+                glOptions="translucent",
             )
         )
 
         self.fov_wireframe_item.hide()
+
+        self.fov_wireframe_item.setDepthValue(
+            1
+        )
 
         self.view.addItem(
             self.fov_wireframe_item
@@ -945,8 +1011,14 @@ class Planning3DWidget(QWidget):
                     ),
                     size=12.0,
                     pxMode=True,
-                    glOptions="translucent",
+                    glOptions=(
+                        PLANNING_OVERLAY_GL_OPTIONS
+                    ),
                 )
+            )
+
+            item.setDepthValue(
+                3
             )
 
             item.hide()
@@ -989,8 +1061,14 @@ class Planning3DWidget(QWidget):
                     ),
                     size=14.0,
                     pxMode=True,
-                    glOptions="translucent",
+                    glOptions=(
+                        PLANNING_OVERLAY_GL_OPTIONS
+                    ),
                 )
+            )
+
+            item.setDepthValue(
+                3
             )
 
             item.hide()
@@ -1031,7 +1109,14 @@ class Planning3DWidget(QWidget):
                     width=3,
                     antialias=True,
                     mode="lines",
+                    glOptions=(
+                        PLANNING_OVERLAY_GL_OPTIONS
+                    ),
                 )
+            )
+
+            axis_item.setDepthValue(
+                2
             )
 
             axis_item.hide()
@@ -1054,8 +1139,14 @@ class Planning3DWidget(QWidget):
                     ),
                     size=14.0,
                     pxMode=True,
-                    glOptions="translucent",
+                    glOptions=(
+                        PLANNING_OVERLAY_GL_OPTIONS
+                    ),
                 )
+            )
+
+            handle_item.setDepthValue(
+                3
             )
 
             handle_item.hide()
@@ -2783,6 +2874,7 @@ class Planning3DWidget(QWidget):
         self._clear_localizer_image_items()
 
         self.fov_wireframe_item.hide()
+        self.fov_wireframe_ghost_item.hide()
 
         for item in (
             self.fov_corner_handle_items
@@ -2840,7 +2932,7 @@ class Planning3DWidget(QWidget):
     @staticmethod
     def _localizer_image_to_rgba(
         image_array,
-        alpha=185,
+        alpha=150,
     ):
         """
         Convert a 2D Localizer magnitude image into the
@@ -3424,6 +3516,7 @@ class Planning3DWidget(QWidget):
             is None
         ):
             self.fov_wireframe_item.hide()
+            self.fov_wireframe_ghost_item.hide()
 
             for item in (
                 self.fov_corner_handle_items
@@ -3456,6 +3549,7 @@ class Planning3DWidget(QWidget):
             is None
         ):
             self.fov_wireframe_item.hide()
+            self.fov_wireframe_ghost_item.hide()
 
             for item in (
                 self.fov_corner_handle_items
@@ -3525,6 +3619,21 @@ class Planning3DWidget(QWidget):
                 3,
             )
         )
+
+        self.fov_wireframe_ghost_item.setData(
+            pos=edge_points,
+            color=(
+                1.0,
+                1.0,
+                0.0,
+                0.22,
+            ),
+            width=2,
+            antialias=True,
+            mode="lines",
+        )
+
+        self.fov_wireframe_ghost_item.show()
 
         self.fov_wireframe_item.setData(
             pos=edge_points,
