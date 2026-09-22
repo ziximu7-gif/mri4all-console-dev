@@ -62,6 +62,7 @@ class PlanningGLViewWidget(
         str,
         float,
         float,
+        bool,
     )
 
     planning_handle_hovered = pyqtSignal(
@@ -274,6 +275,11 @@ class PlanningGLViewWidget(
                 position
             )
 
+            symmetric_resize = bool(
+                event.modifiers()
+                & Qt.AltModifier
+            )
+
             self.planning_handle_dragged.emit(
                 self._active_planning_handle,
                 float(
@@ -282,6 +288,7 @@ class PlanningGLViewWidget(
                 float(
                     difference.y()
                 ),
+                symmetric_resize,
             )
 
             event.accept()
@@ -376,6 +383,35 @@ class PlanningGLViewWidget(
             return
 
         super().mouseReleaseEvent(
+            event
+        )
+
+    def clear_planning_handle_state(
+        self,
+    ):
+        self._active_planning_handle = None
+        self._planning_handle_last_pos = None
+        self._hovered_planning_handle = None
+
+        self.planning_handle_hovered.emit(
+            None
+        )
+
+    def leaveEvent(
+        self,
+        event,
+    ):
+        if (
+            self._hovered_planning_handle
+            is not None
+        ):
+            self._hovered_planning_handle = None
+
+            self.planning_handle_hovered.emit(
+                None
+            )
+
+        super().leaveEvent(
             event
         )
 
@@ -515,10 +551,12 @@ class Planning3DWidget(QWidget):
         )
 
         self.view.setToolTip(
-            "Left drag: orbit camera\n"
+            "Left drag empty space: orbit camera\n"
+            "Left drag FOV face handle: resize FOV\n"
+            "Alt + Left drag handle: symmetric resize\n"
             "Middle/Ctrl+Left: pan camera\n"
             "Wheel: zoom\n"
-            "Right drag: edit selected FOV axis"
+            "Right drag: legacy FOV MOVE / ROT"
         )
 
         self.view.setBackgroundColor(
@@ -1396,11 +1434,106 @@ class Planning3DWidget(QWidget):
                     pxMode=True,
                 )
 
+    def _project_scanner_point_to_widget(
+        self,
+        point_scanner_m,
+    ):
+        """
+        Project one scanner-space 3D point onto widget
+        coordinates in pixels.
+
+        Returns:
+            np.ndarray([x, y])
+
+        or None if the point cannot be projected.
+        """
+
+        point = np.asarray(
+            point_scanner_m,
+            dtype=float,
+        )
+
+        if (
+            point.shape != (3,)
+            or not np.all(
+                np.isfinite(
+                    point
+                )
+            )
+        ):
+            return None
+
+        world_point = QVector4D(
+            float(
+                point[0]
+            ),
+            float(
+                point[1]
+            ),
+            float(
+                point[2]
+            ),
+            1.0,
+        )
+
+        clip_point = (
+            self.view.projectionMatrix()
+            * self.view.viewMatrix()
+            * world_point
+        )
+
+        w = float(
+            clip_point.w()
+        )
+
+        if (
+            not np.isfinite(
+                w
+            )
+            or w <= 1e-9
+        ):
+            return None
+
+        ndc_x = (
+            float(
+                clip_point.x()
+            )
+            / w
+        )
+
+        ndc_y = (
+            float(
+                clip_point.y()
+            )
+            / w
+        )
+
+        return np.array(
+            [
+                (
+                    ndc_x + 1.0
+                )
+                * 0.5
+                * float(
+                    self.view.width()
+                ),
+                (
+                    1.0 - ndc_y
+                )
+                * 0.5
+                * float(
+                    self.view.height()
+                ),
+            ],
+            dtype=float,
+        )
+
     def _drag_fov_face_handle(
         self,
         handle_id,
         delta_x_pixels,
         delta_y_pixels,
+        symmetric_resize,
     ):
         """
         Resize one FOV box-local axis by dragging a face handle.
@@ -1487,49 +1620,61 @@ class Planning3DWidget(QWidget):
             )
         )
 
-        # Transform the outward axis into camera/view
-        # coordinates. w=0 means "direction", not a position.
-        axis_view = (
-            self.view.viewMatrix()
-            * QVector4D(
-                float(
-                    outward_axis[0]
-                ),
-                float(
-                    outward_axis[1]
-                ),
-                float(
-                    outward_axis[2]
-                ),
-                0.0,
+        # Project the selected local-axis direction through the
+        # full camera + perspective transform.
+        #
+        # This measures the actual screen-space direction and
+        # pixels-per-meter of this handle at its current depth.
+
+        probe_length_m = max(
+            1e-4,
+            0.02
+            * float(
+                scan_geometry.fov_local_m[
+                    axis_index
+                ]
+            ),
+        )
+
+        screen_face = (
+            self._project_scanner_point_to_widget(
+                face_position
             )
         )
 
-        screen_axis = np.array(
-            [
-                float(
-                    axis_view.x()
-                ),
-                -float(
-                    axis_view.y()
-                ),
-            ],
-            dtype=float,
-        )
-
-        screen_axis_length = float(
-            np.linalg.norm(
-                screen_axis
+        screen_probe = (
+            self._project_scanner_point_to_widget(
+                face_position
+                + outward_axis
+                * probe_length_m
             )
         )
 
-        # Looking almost directly along this axis makes
-        # screen-space dragging ill-conditioned.
-        if screen_axis_length < 1e-6:
+        if (
+            screen_face is None
+            or screen_probe is None
+        ):
             return
 
-        screen_axis /= (
-            screen_axis_length
+        screen_axis_vector = (
+            screen_probe
+            - screen_face
+        )
+
+        screen_axis_pixels = float(
+            np.linalg.norm(
+                screen_axis_vector
+            )
+        )
+
+        # If we are looking almost exactly along this axis,
+        # a 2D mouse drag cannot control it reliably.
+        if screen_axis_pixels < 1e-3:
+            return
+
+        screen_axis = (
+            screen_axis_vector
+            / screen_axis_pixels
         )
 
         mouse_delta = np.array(
@@ -1551,25 +1696,22 @@ class Planning3DWidget(QWidget):
             )
         )
 
-        meters_per_pixel = float(
-            self.view.pixelSize(
-                QVector3D(
-                    float(
-                        face_position[0]
-                    ),
-                    float(
-                        face_position[1]
-                    ),
-                    float(
-                        face_position[2]
-                    ),
-                )
-            )
+        pixels_per_meter = (
+            screen_axis_pixels
+            / probe_length_m
         )
+
+        if (
+            not np.isfinite(
+                pixels_per_meter
+            )
+            or pixels_per_meter < 1e-6
+        ):
+            return
 
         outward_delta_m = (
             delta_pixels
-            * meters_per_pixel
+            / pixels_per_meter
         )
 
         size_attribute = (
@@ -1582,12 +1724,28 @@ class Planning3DWidget(QWidget):
             ]
         )
 
-        size_delta_norm = (
-            outward_delta_m
-            / reference_fov_m[
-                axis_index
-            ]
-        )
+        if symmetric_resize:
+
+            # Selected face moves by d and the opposite face moves
+            # by -d, therefore total box size changes by 2*d.
+            size_delta_norm = (
+                2.0
+                * outward_delta_m
+                / reference_fov_m[
+                    axis_index
+                ]
+            )
+
+        else:
+
+            # Selected face moves while the opposite face stays
+            # fixed.
+            size_delta_norm = (
+                outward_delta_m
+                / reference_fov_m[
+                    axis_index
+                ]
+            )
 
         current_size = float(
             getattr(
@@ -1640,18 +1798,25 @@ class Planning3DWidget(QWidget):
             dtype=float,
         )
 
-        # Moving one face by d moves the center by d/2.
-        # outward_axis is expressed in scanner XYZ.
-        center_delta_norm = (
-            0.5
-            * actual_delta_m
-            * outward_axis
-            / reference_fov_m
-        )
+        if not symmetric_resize:
 
-        center_norm += (
-            center_delta_norm
-        )
+            # Normal resize:
+            #
+            # selected face moves
+            # opposite face stays fixed
+            #
+            # therefore center moves by half of the actual size
+            # change.
+            center_delta_norm = (
+                0.5
+                * actual_delta_m
+                * outward_axis
+                / reference_fov_m
+            )
+
+            center_norm += (
+                center_delta_norm
+            )
 
         box.center_x = float(
             center_norm[0]
@@ -1854,6 +2019,8 @@ class Planning3DWidget(QWidget):
             item.hide()
 
         self.fov_face_handle_positions_scanner_m = {}
+
+        self.view.clear_planning_handle_state()
 
     # =====================================================
     # Localizer planes
@@ -2631,14 +2798,6 @@ class Planning3DWidget(QWidget):
                     ],
                     dtype=float,
                 ),
-                color=(
-                    1.0,
-                    0.75,
-                    0.0,
-                    1.0,
-                ),
-                size=14.0,
-                pxMode=True,
             )
 
             self.fov_face_handle_items[
