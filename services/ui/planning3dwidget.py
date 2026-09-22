@@ -555,12 +555,24 @@ class Planning3DWidget(QWidget):
                 [1.0, 0.0, 0.0],
                 dtype=float,
             ),
+            (
+                1.0,
+                0.2,
+                0.2,
+                1.0,
+            ),
         ),
         (
             "move_y",
             np.array(
                 [0.0, 1.0, 0.0],
                 dtype=float,
+            ),
+            (
+                0.2,
+                1.0,
+                0.2,
+                1.0,
             ),
         ),
         (
@@ -569,8 +581,18 @@ class Planning3DWidget(QWidget):
                 [0.0, 0.0, 1.0],
                 dtype=float,
             ),
+            (
+                0.2,
+                0.5,
+                1.0,
+                1.0,
+            ),
         ),
     )
+
+    # Cone geometry for the MOVE gizmo arrow heads.
+    FOV_MOVE_ARROW_LENGTH_M = 0.012
+    FOV_MOVE_ARROW_RADIUS_M = 0.004
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1047,24 +1069,36 @@ class Planning3DWidget(QWidget):
             sign,
         ) in self.FOV_FACE_HANDLE_SPECS:
 
-            item = (
-                gl.GLScatterPlotItem(
-                    pos=np.zeros(
-                        (1, 3),
-                        dtype=float,
-                    ),
-                    color=(
-                        1.0,
-                        0.75,
-                        0.0,
-                        1.0,
-                    ),
-                    size=14.0,
-                    pxMode=True,
-                    glOptions=(
-                        PLANNING_OVERLAY_GL_OPTIONS
-                    ),
-                )
+            item = gl.GLMeshItem(
+                vertexes=np.zeros(
+                    (4, 3),
+                    dtype=float,
+                ),
+                faces=np.asarray(
+                    [
+                        [0, 1, 2],
+                        [0, 2, 3],
+                    ],
+                    dtype=int,
+                ),
+                color=(
+                    1.0,
+                    0.75,
+                    0.0,
+                    1.0,
+                ),
+                smooth=False,
+                computeNormals=False,
+                drawEdges=True,
+                edgeColor=(
+                    1.0,
+                    1.0,
+                    1.0,
+                    1.0,
+                ),
+                glOptions=(
+                    PLANNING_OVERLAY_GL_OPTIONS
+                ),
             )
 
             item.setDepthValue(
@@ -1092,6 +1126,7 @@ class Planning3DWidget(QWidget):
         for (
             handle_id,
             scanner_axis,
+            axis_color,
         ) in self.FOV_MOVE_HANDLE_SPECS:
 
             axis_item = (
@@ -1100,12 +1135,7 @@ class Planning3DWidget(QWidget):
                         (2, 3),
                         dtype=float,
                     ),
-                    color=(
-                        1.0,
-                        1.0,
-                        1.0,
-                        0.75,
-                    ),
+                    color=axis_color,
                     width=3,
                     antialias=True,
                     mode="lines",
@@ -1125,24 +1155,23 @@ class Planning3DWidget(QWidget):
                 axis_item
             )
 
-            handle_item = (
-                gl.GLScatterPlotItem(
-                    pos=np.zeros(
-                        (1, 3),
-                        dtype=float,
-                    ),
-                    color=(
-                        1.0,
-                        1.0,
-                        1.0,
-                        1.0,
-                    ),
-                    size=14.0,
-                    pxMode=True,
-                    glOptions=(
-                        PLANNING_OVERLAY_GL_OPTIONS
-                    ),
-                )
+            handle_item = gl.GLMeshItem(
+                meshdata=gl.MeshData.cylinder(
+                    rows=1,
+                    cols=12,
+                    radius=[
+                        self.FOV_MOVE_ARROW_RADIUS_M,
+                        0.0,
+                    ],
+                    length=self.FOV_MOVE_ARROW_LENGTH_M,
+                ),
+                color=axis_color,
+                smooth=False,
+                computeNormals=False,
+                drawEdges=False,
+                glOptions=(
+                    PLANNING_OVERLAY_GL_OPTIONS
+                ),
             )
 
             handle_item.setDepthValue(
@@ -1600,7 +1629,7 @@ class Planning3DWidget(QWidget):
 
         return None
 
-    def _set_handle_visual(
+    def _set_scatter_handle_visual(
         self,
         item,
         hovered,
@@ -1628,6 +1657,72 @@ class Planning3DWidget(QWidget):
                 pxMode=True,
             )
 
+    def _set_face_handle_visual(
+        self,
+        item,
+        hovered,
+    ):
+        if hovered:
+            item.setColor(
+                (
+                    1.0,
+                    1.0,
+                    1.0,
+                    1.0,
+                )
+            )
+        else:
+            item.setColor(
+                (
+                    1.0,
+                    0.75,
+                    0.0,
+                    1.0,
+                )
+            )
+
+    def _move_handle_color(
+        self,
+        handle_id,
+    ):
+        for (
+            current_id,
+            scanner_axis,
+            axis_color,
+        ) in self.FOV_MOVE_HANDLE_SPECS:
+
+            if current_id == handle_id:
+                return axis_color
+
+        return (
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+        )
+
+    def _set_move_handle_visual(
+        self,
+        item,
+        hovered,
+        handle_id,
+    ):
+        if hovered:
+            item.setColor(
+                (
+                    1.0,
+                    1.0,
+                    1.0,
+                    1.0,
+                )
+            )
+        else:
+            item.setColor(
+                self._move_handle_color(
+                    handle_id
+                )
+            )
+
     def _hover_fov_handle(
         self,
         handle_id,
@@ -1643,7 +1738,7 @@ class Planning3DWidget(QWidget):
             self.fov_face_handle_items
             .items()
         ):
-            self._set_handle_visual(
+            self._set_face_handle_visual(
                 item,
                 current_id == handle_id,
             )
@@ -1655,9 +1750,10 @@ class Planning3DWidget(QWidget):
             self.fov_move_handle_items
             .items()
         ):
-            self._set_handle_visual(
+            self._set_move_handle_visual(
                 item,
                 current_id == handle_id,
+                current_id,
             )
 
         for (
@@ -1667,7 +1763,7 @@ class Planning3DWidget(QWidget):
             self.fov_corner_handle_items
             .items()
         ):
-            self._set_handle_visual(
+            self._set_scatter_handle_visual(
                 item,
                 current_id == handle_id,
             )
@@ -2170,6 +2266,7 @@ class Planning3DWidget(QWidget):
         for (
             current_id,
             scanner_axis,
+            axis_color,
         ) in self.FOV_MOVE_HANDLE_SPECS:
 
             if current_id == handle_id:
@@ -3738,15 +3835,67 @@ class Planning3DWidget(QWidget):
                 face_position.copy()
             )
 
+            tangent_indices = [
+                index
+                for index in range(3)
+                if index != axis_index
+            ]
+
+            tangent_u = rotation[
+                :,
+                tangent_indices[0],
+            ]
+
+            tangent_v = rotation[
+                :,
+                tangent_indices[1],
+            ]
+
+            half_size_m = 0.005
+
+            vertices = np.asarray(
+                [
+                    face_position
+                    - half_size_m * tangent_u
+                    - half_size_m * tangent_v,
+
+                    face_position
+                    + half_size_m * tangent_u
+                    - half_size_m * tangent_v,
+
+                    face_position
+                    + half_size_m * tangent_u
+                    + half_size_m * tangent_v,
+
+                    face_position
+                    - half_size_m * tangent_u
+                    + half_size_m * tangent_v,
+                ],
+                dtype=float,
+            )
+
+            faces = np.asarray(
+                [
+                    [0, 1, 2],
+                    [0, 2, 3],
+                ],
+                dtype=int,
+            )
+
             self.fov_face_handle_items[
                 handle_id
-            ].setData(
-                pos=np.asarray(
-                    [
-                        face_position
-                    ],
-                    dtype=float,
+            ].setMeshData(
+                vertexes=vertices,
+                faces=faces,
+                color=(
+                    1.0,
+                    0.75,
+                    0.0,
+                    1.0,
                 ),
+                smooth=False,
+                computeNormals=False,
+                drawEdges=True,
             )
 
             self.fov_face_handle_items[
@@ -3766,6 +3915,7 @@ class Planning3DWidget(QWidget):
         for (
             handle_id,
             scanner_axis,
+            axis_color,
         ) in self.FOV_MOVE_HANDLE_SPECS:
 
             scanner_axis = np.asarray(
@@ -3789,23 +3939,55 @@ class Planning3DWidget(QWidget):
                     ],
                     dtype=float,
                 ),
+                color=axis_color,
             )
 
-            self.fov_move_handle_items[
-                handle_id
-            ].setData(
-                pos=np.asarray(
-                    [
-                        endpoint
-                    ],
-                    dtype=float,
+            arrow_base = (
+                endpoint
+                - scanner_axis
+                * self.FOV_MOVE_ARROW_LENGTH_M
+            )
+
+            arrow_transform = Transform3D()
+
+            arrow_transform.translate(
+                float(
+                    arrow_base[0]
+                ),
+                float(
+                    arrow_base[1]
+                ),
+                float(
+                    arrow_base[2]
                 ),
             )
 
-            self.fov_move_axis_items[
+            if handle_id == "move_x":
+                arrow_transform.rotate(
+                    90.0,
+                    0.0,
+                    1.0,
+                    0.0,
+                )
+
+            elif handle_id == "move_y":
+                arrow_transform.rotate(
+                    -90.0,
+                    1.0,
+                    0.0,
+                    0.0,
+                )
+
+            self.fov_move_handle_items[
+                handle_id
+            ].setTransform(
+                arrow_transform
+            )
+
+            self.fov_move_handle_items[
                 handle_id
             ].show()
 
-            self.fov_move_handle_items[
+            self.fov_move_axis_items[
                 handle_id
             ].show()
