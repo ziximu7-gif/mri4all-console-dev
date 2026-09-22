@@ -921,31 +921,48 @@ class Planning3DWidget(QWidget):
         #
         # pxMode=True keeps them a constant ~12 px on
         # screen, independent of camera zoom.
-        self.fov_corner_handle_item = (
-            gl.GLScatterPlotItem(
-                pos=np.zeros(
-                    (8, 3),
-                    dtype=float,
-                ),
-                color=(
-                    1.0,
-                    1.0,
-                    0.0,
-                    1.0,
-                ),
-                size=12.0,
-                pxMode=True,
-                glOptions="translucent",
-            )
-        )
-
-        self.fov_corner_handle_item.hide()
-
-        self.view.addItem(
-            self.fov_corner_handle_item
-        )
+        self.fov_corner_handle_items = {}
 
         self.fov_corner_positions_scanner_m = None
+
+        for corner_index in range(8):
+
+            handle_id = (
+                f"corner_{corner_index}"
+            )
+
+            item = (
+                gl.GLScatterPlotItem(
+                    pos=np.zeros(
+                        (1, 3),
+                        dtype=float,
+                    ),
+                    color=(
+                        1.0,
+                        1.0,
+                        0.0,
+                        1.0,
+                    ),
+                    size=12.0,
+                    pxMode=True,
+                    glOptions="translucent",
+                )
+            )
+
+            item.hide()
+
+            self.view.addItem(
+                item
+            )
+
+            self.view.register_planning_handle(
+                item,
+                handle_id,
+            )
+
+            self.fov_corner_handle_items[
+                handle_id
+            ] = item
 
         # One separately pickable handle per FOV face center.
         self.fov_face_handle_items = {}
@@ -1552,6 +1569,18 @@ class Planning3DWidget(QWidget):
                 current_id == handle_id,
             )
 
+        for (
+            current_id,
+            item,
+        ) in (
+            self.fov_corner_handle_items
+            .items()
+        ):
+            self._set_handle_visual(
+                item,
+                current_id == handle_id,
+            )
+
     def _drag_planning_handle(
         self,
         handle_id,
@@ -1588,6 +1617,17 @@ class Planning3DWidget(QWidget):
                 handle_id,
                 delta_x_pixels,
                 delta_y_pixels,
+            )
+            return
+
+        if handle_id.startswith(
+            "corner_"
+        ):
+            self._drag_fov_corner_handle(
+                handle_id,
+                delta_x_pixels,
+                delta_y_pixels,
+                symmetric_resize,
             )
 
     def _project_scanner_point_to_widget(
@@ -2210,6 +2250,368 @@ class Planning3DWidget(QWidget):
 
         self.planning_changed.emit()
 
+    @staticmethod
+    def _corner_handle_index(
+        handle_id,
+    ):
+        prefix = "corner_"
+
+        if not str(
+            handle_id
+        ).startswith(
+            prefix
+        ):
+            return None
+
+        try:
+            corner_index = int(
+                str(
+                    handle_id
+                )[
+                    len(prefix):
+                ]
+            )
+        except ValueError:
+            return None
+
+        if not (
+            0
+            <= corner_index
+            < 8
+        ):
+            return None
+
+        return corner_index
+
+    def _drag_fov_corner_handle(
+        self,
+        handle_id,
+        delta_x_pixels,
+        delta_y_pixels,
+        symmetric_resize,
+    ):
+        """
+        Uniformly resize the FOV using one corner.
+
+        Normal:
+            opposite corner stays fixed.
+
+        Alt:
+            FOV center stays fixed.
+        """
+
+        if (
+            self.planning_state is None
+            or self.reference_fov_m is None
+        ):
+            return
+
+        corner_index = (
+            self._corner_handle_index(
+                handle_id
+            )
+        )
+
+        if corner_index is None:
+            return
+
+        box = (
+            self.planning_state
+            .fov_box
+        )
+
+        reference_fov_m = np.full(
+            3,
+            float(
+                self.reference_fov_m
+            ),
+            dtype=float,
+        )
+
+        scan_geometry = (
+            planning_box_to_scan_geometry(
+                fov_box=(
+                    box.as_dict()
+                ),
+                reference_fov_mm=(
+                    reference_fov_m
+                    * 1000.0
+                ),
+            )
+        )
+
+        corners = (
+            scan_geometry_box_corners_scanner_m(
+                scan_geometry
+            )
+        )
+
+        center = np.asarray(
+            scan_geometry.center_scanner_m,
+            dtype=float,
+        )
+
+        corner = np.asarray(
+            corners[
+                corner_index
+            ],
+            dtype=float,
+        )
+
+        # The geometrically opposite corner does not require
+        # knowledge of the canonical corner index table.
+        opposite_corner = (
+            2.0 * center
+            - corner
+        )
+
+        diagonal = (
+            corner
+            - opposite_corner
+        )
+
+        diagonal_length_m = float(
+            np.linalg.norm(
+                diagonal
+            )
+        )
+
+        if diagonal_length_m < 1e-9:
+            return
+
+        diagonal_axis = (
+            diagonal
+            / diagonal_length_m
+        )
+
+        screen_corner = (
+            self._project_scanner_point_to_widget(
+                corner
+            )
+        )
+
+        screen_opposite = (
+            self._project_scanner_point_to_widget(
+                opposite_corner
+            )
+        )
+
+        if (
+            screen_corner is None
+            or screen_opposite is None
+        ):
+            return
+
+        screen_diagonal = (
+            screen_corner
+            - screen_opposite
+        )
+
+        screen_diagonal_length = float(
+            np.linalg.norm(
+                screen_diagonal
+            )
+        )
+
+        if screen_diagonal_length < 1e-3:
+            return
+
+        screen_axis = (
+            screen_diagonal
+            / screen_diagonal_length
+        )
+
+        mouse_delta = np.array(
+            [
+                float(
+                    delta_x_pixels
+                ),
+                float(
+                    delta_y_pixels
+                ),
+            ],
+            dtype=float,
+        )
+
+        delta_pixels = float(
+            np.dot(
+                mouse_delta,
+                screen_axis,
+            )
+        )
+
+        pixels_per_meter = (
+            screen_diagonal_length
+            / diagonal_length_m
+        )
+
+        if (
+            not np.isfinite(
+                pixels_per_meter
+            )
+            or pixels_per_meter < 1e-6
+        ):
+            return
+
+        corner_delta_m = (
+            delta_pixels
+            / pixels_per_meter
+        )
+
+        current_sizes_norm = np.array(
+            [
+                float(
+                    box.size_x
+                ),
+                float(
+                    box.size_y
+                ),
+                float(
+                    box.size_z
+                ),
+            ],
+            dtype=float,
+        )
+
+        if symmetric_resize:
+
+            # Center fixed:
+            # selected corner moves d,
+            # opposite corner moves -d.
+            target_diagonal_length_m = (
+                diagonal_length_m
+                + 2.0
+                * corner_delta_m
+            )
+
+        else:
+
+            # Opposite corner fixed:
+            # selected corner alone moves d.
+            target_diagonal_length_m = (
+                diagonal_length_m
+                + corner_delta_m
+            )
+
+        raw_scale = (
+            target_diagonal_length_m
+            / diagonal_length_m
+        )
+
+        minimum_scale = float(
+            np.max(
+                0.02
+                / current_sizes_norm
+            )
+        )
+
+        maximum_scale = float(
+            np.min(
+                1.0
+                / current_sizes_norm
+            )
+        )
+
+        scale = float(
+            np.clip(
+                raw_scale,
+                minimum_scale,
+                maximum_scale,
+            )
+        )
+
+        if abs(
+            scale - 1.0
+        ) < 1e-12:
+            return
+
+        candidate_sizes = (
+            current_sizes_norm
+            * scale
+        )
+
+        if symmetric_resize:
+
+            candidate_center_scanner_m = (
+                center.copy()
+            )
+
+        else:
+
+            # opposite is fixed:
+            #
+            # new selected =
+            #     opposite + scale * old diagonal
+            #
+            # center is the midpoint.
+            candidate_center_scanner_m = (
+                opposite_corner
+                + 0.5
+                * scale
+                * diagonal
+            )
+
+        candidate_center_norm = (
+            0.5
+            + candidate_center_scanner_m
+            / reference_fov_m
+        )
+
+        minimum_center = (
+            0.5
+            * candidate_sizes
+        )
+
+        maximum_center = (
+            1.0
+            - 0.5
+            * candidate_sizes
+        )
+
+        tolerance = 1e-12
+
+        if (
+            np.any(
+                candidate_center_norm
+                < minimum_center
+                - tolerance
+            )
+            or np.any(
+                candidate_center_norm
+                > maximum_center
+                + tolerance
+            )
+        ):
+            return
+
+        box.size_x = float(
+            candidate_sizes[0]
+        )
+
+        box.size_y = float(
+            candidate_sizes[1]
+        )
+
+        box.size_z = float(
+            candidate_sizes[2]
+        )
+
+        box.center_x = float(
+            candidate_center_norm[0]
+        )
+
+        box.center_y = float(
+            candidate_center_norm[1]
+        )
+
+        box.center_z = float(
+            candidate_center_norm[2]
+        )
+
+        self.refresh_planning_geometry()
+
+        self.planning_changed.emit()
+
     def _nudge_fov(
         self,
         direction,
@@ -2382,7 +2784,11 @@ class Planning3DWidget(QWidget):
 
         self.fov_wireframe_item.hide()
 
-        self.fov_corner_handle_item.hide()
+        for item in (
+            self.fov_corner_handle_items
+            .values()
+        ):
+            item.hide()
 
         self.fov_corner_positions_scanner_m = None
 
@@ -3018,7 +3424,12 @@ class Planning3DWidget(QWidget):
             is None
         ):
             self.fov_wireframe_item.hide()
-            self.fov_corner_handle_item.hide()
+
+            for item in (
+                self.fov_corner_handle_items
+                .values()
+            ):
+                item.hide()
 
             for item in (
                 self.fov_face_handle_items
@@ -3045,7 +3456,12 @@ class Planning3DWidget(QWidget):
             is None
         ):
             self.fov_wireframe_item.hide()
-            self.fov_corner_handle_item.hide()
+
+            for item in (
+                self.fov_corner_handle_items
+                .values()
+            ):
+                item.hide()
 
             for item in (
                 self.fov_face_handle_items
@@ -3141,19 +3557,33 @@ class Planning3DWidget(QWidget):
             ).copy()
         )
 
-        self.fov_corner_handle_item.setData(
-            pos=corners,
-            color=(
-                1.0,
-                1.0,
-                0.0,
-                1.0,
-            ),
-            size=12.0,
-            pxMode=True,
-        )
+        for corner_index in range(8):
 
-        self.fov_corner_handle_item.show()
+            handle_id = (
+                f"corner_{corner_index}"
+            )
+
+            corner_position = np.asarray(
+                corners[
+                    corner_index
+                ],
+                dtype=float,
+            )
+
+            self.fov_corner_handle_items[
+                handle_id
+            ].setData(
+                pos=np.asarray(
+                    [
+                        corner_position
+                    ],
+                    dtype=float,
+                ),
+            )
+
+            self.fov_corner_handle_items[
+                handle_id
+            ].show()
 
         center = np.asarray(
             scan_geometry.center_scanner_m,
