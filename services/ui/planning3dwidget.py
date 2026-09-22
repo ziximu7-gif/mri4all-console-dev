@@ -83,6 +83,7 @@ class PlanningGLViewWidget(
         self._planning_handle_items = {}
         self._active_planning_handle = None
         self._planning_handle_last_pos = None
+        self._planning_handle_symmetric_resize = False
         self._hovered_planning_handle = None
 
         self.setMouseTracking(
@@ -190,6 +191,13 @@ class PlanningGLViewWidget(
                     position
                 )
 
+                # Interaction mode is fixed for the entire drag.
+                # Alt must already be held when the handle is picked.
+                self._planning_handle_symmetric_resize = bool(
+                    event.modifiers()
+                    & Qt.AltModifier
+                )
+
                 event.accept()
                 return
 
@@ -275,11 +283,6 @@ class PlanningGLViewWidget(
                 position
             )
 
-            symmetric_resize = bool(
-                event.modifiers()
-                & Qt.AltModifier
-            )
-
             self.planning_handle_dragged.emit(
                 self._active_planning_handle,
                 float(
@@ -288,7 +291,9 @@ class PlanningGLViewWidget(
                 float(
                     difference.y()
                 ),
-                symmetric_resize,
+                bool(
+                    self._planning_handle_symmetric_resize
+                ),
             )
 
             event.accept()
@@ -365,6 +370,7 @@ class PlanningGLViewWidget(
         ):
             self._active_planning_handle = None
             self._planning_handle_last_pos = None
+            self._planning_handle_symmetric_resize = False
 
             event.accept()
             return
@@ -391,6 +397,7 @@ class PlanningGLViewWidget(
     ):
         self._active_planning_handle = None
         self._planning_handle_last_pos = None
+        self._planning_handle_symmetric_resize = False
         self._hovered_planning_handle = None
 
         self.planning_handle_hovered.emit(
@@ -1903,8 +1910,6 @@ class Planning3DWidget(QWidget):
             )
         )
 
-        # Respect Box3D's existing size contract before
-        # applying the center shift.
         new_size = float(
             np.clip(
                 current_size
@@ -1919,6 +1924,11 @@ class Planning3DWidget(QWidget):
             - current_size
         )
 
+        if abs(
+            actual_size_delta_norm
+        ) < 1e-12:
+            return
+
         actual_delta_m = (
             actual_size_delta_norm
             * reference_fov_m[
@@ -1926,13 +1936,7 @@ class Planning3DWidget(QWidget):
             ]
         )
 
-        setattr(
-            box,
-            size_attribute,
-            new_size,
-        )
-
-        center_norm = np.array(
+        candidate_center_norm = np.array(
             [
                 float(
                     box.center_x
@@ -1949,13 +1953,6 @@ class Planning3DWidget(QWidget):
 
         if not symmetric_resize:
 
-            # Normal resize:
-            #
-            # selected face moves
-            # opposite face stays fixed
-            #
-            # therefore center moves by half of the actual size
-            # change.
             center_delta_norm = (
                 0.5
                 * actual_delta_m
@@ -1963,23 +1960,73 @@ class Planning3DWidget(QWidget):
                 / reference_fov_m
             )
 
-            center_norm += (
+            candidate_center_norm += (
                 center_delta_norm
             )
 
+        candidate_sizes = np.array(
+            [
+                float(
+                    box.size_x
+                ),
+                float(
+                    box.size_y
+                ),
+                float(
+                    box.size_z
+                ),
+            ],
+            dtype=float,
+        )
+
+        candidate_sizes[
+            axis_index
+        ] = new_size
+
+        minimum_center = (
+            0.5
+            * candidate_sizes
+        )
+
+        maximum_center = (
+            1.0
+            - 0.5
+            * candidate_sizes
+        )
+
+        tolerance = 1e-12
+
+        if (
+            np.any(
+                candidate_center_norm
+                < minimum_center
+                - tolerance
+            )
+            or np.any(
+                candidate_center_norm
+                > maximum_center
+                + tolerance
+            )
+        ):
+            return
+
+        setattr(
+            box,
+            size_attribute,
+            new_size,
+        )
+
         box.center_x = float(
-            center_norm[0]
+            candidate_center_norm[0]
         )
 
         box.center_y = float(
-            center_norm[1]
+            candidate_center_norm[1]
         )
 
         box.center_z = float(
-            center_norm[2]
+            candidate_center_norm[2]
         )
-
-        box.clamp()
 
         self.refresh_planning_geometry()
 
