@@ -25,6 +25,7 @@ import pyqtgraph.opengl as gl
 
 from common.geometry import (
     planning_box_to_scan_geometry,
+    scan_geometry_box_corners_scanner_m,
     scan_geometry_box_edges_scanner_m,
     planning_euler_to_matrix,
     planning_matrix_to_euler,
@@ -613,6 +614,35 @@ class Planning3DWidget(QWidget):
             self.fov_wireframe_item
         )
 
+        # Yellow corner handles marking the eight FOV
+        # corners in scanner XYZ.
+        #
+        # pxMode=True keeps them a constant ~12 px on
+        # screen, independent of camera zoom.
+        self.fov_corner_handle_item = (
+            gl.GLScatterPlotItem(
+                pos=np.zeros(
+                    (8, 3),
+                    dtype=float,
+                ),
+                color=(
+                    1.0,
+                    1.0,
+                    0.0,
+                    1.0,
+                ),
+                size=12.0,
+                pxMode=True,
+                glOptions="translucent",
+            )
+        )
+
+        self.fov_corner_handle_item.hide()
+
+        self.view.addItem(
+            self.fov_corner_handle_item
+        )
+
         # Start from the same camera state used by HOME.
         self.reset_camera()
 
@@ -1198,6 +1228,10 @@ class Planning3DWidget(QWidget):
         self._clear_localizer_image_items()
 
         self.fov_wireframe_item.hide()
+
+        self.fov_corner_handle_item.hide()
+
+        self.fov_corner_positions_scanner_m = None
 
     # =====================================================
     # Localizer planes
@@ -1809,6 +1843,7 @@ class Planning3DWidget(QWidget):
             is None
         ):
             self.fov_wireframe_item.hide()
+            self.fov_corner_handle_item.hide()
             return
 
         if (
@@ -1816,6 +1851,7 @@ class Planning3DWidget(QWidget):
             is None
         ):
             self.fov_wireframe_item.hide()
+            self.fov_corner_handle_item.hide()
             return
 
         reference_fov_mm = np.full(
@@ -1875,3 +1911,33 @@ class Planning3DWidget(QWidget):
         )
 
         self.fov_wireframe_item.show()
+
+        # Same canonical geometry, second representation:
+        # the eight handles are the FOV corners used later
+        # for direct 3D interaction.
+        corners = (
+            scan_geometry_box_corners_scanner_m(
+                scan_geometry
+            )
+        )
+
+        self.fov_corner_positions_scanner_m = (
+            np.asarray(
+                corners,
+                dtype=float,
+            ).copy()
+        )
+
+        self.fov_corner_handle_item.setData(
+            pos=corners,
+            color=(
+                1.0,
+                1.0,
+                0.0,
+                1.0,
+            ),
+            size=12.0,
+            pxMode=True,
+        )
+
+        self.fov_corner_handle_item.show()
