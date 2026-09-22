@@ -31,6 +31,170 @@ from common.geometry import (
 )
 
 
+class PlanningGLViewWidget(
+    gl.GLViewWidget
+):
+    """
+    GLViewWidget with one additional planning gesture.
+
+    Standard pyqtgraph camera interaction is preserved:
+
+        left drag          -> orbit camera
+        Ctrl + left drag   -> pan camera
+        middle drag        -> pan camera
+        wheel              -> zoom
+
+    Planning interaction:
+
+        right drag         -> FOV operation
+
+    This widget deliberately knows nothing about
+    PlanningState or the MOVE/ROT/axis selection. It only
+    reports how far the pointer travelled horizontally.
+    """
+
+    planning_dragged = pyqtSignal(
+        float
+    )
+
+    def __init__(
+        self,
+        parent=None,
+    ):
+        super().__init__(
+            parent=parent
+        )
+
+        self._planning_drag_active = False
+        self._planning_drag_last_pos = None
+
+    @staticmethod
+    def _event_local_pos(
+        event,
+    ):
+        if hasattr(
+            event,
+            "position",
+        ):
+            return event.position()
+
+        return event.localPos()
+
+    def mousePressEvent(
+        self,
+        event,
+    ):
+        position = (
+            self._event_local_pos(
+                event
+            )
+        )
+
+        # Also reset pyqtgraph's camera-drag reference point,
+        # preventing a jump when starting a new camera drag.
+        self.mousePos = position
+
+        if (
+            event.button()
+            == Qt.RightButton
+        ):
+            self._planning_drag_active = True
+            self._planning_drag_last_pos = position
+
+            self.setFocus()
+
+            event.accept()
+            return
+
+        super().mousePressEvent(
+            event
+        )
+
+    def mouseMoveEvent(
+        self,
+        event,
+    ):
+        if (
+            self._planning_drag_active
+            and (
+                event.buttons()
+                & Qt.RightButton
+            )
+        ):
+            position = (
+                self._event_local_pos(
+                    event
+                )
+            )
+
+            if (
+                self._planning_drag_last_pos
+                is None
+            ):
+                self._planning_drag_last_pos = (
+                    position
+                )
+
+                event.accept()
+                return
+
+            difference = (
+                position
+                - self._planning_drag_last_pos
+            )
+
+            self._planning_drag_last_pos = (
+                position
+            )
+
+            # v0 contract:
+            #
+            # Horizontal screen drag is a scalar control
+            # for the selected scanner axis.
+            #
+            # right -> positive
+            # left  -> negative
+            delta_pixels = float(
+                difference.x()
+            )
+
+            if (
+                abs(delta_pixels)
+                > 1e-6
+            ):
+                self.planning_dragged.emit(
+                    delta_pixels
+                )
+
+            event.accept()
+            return
+
+        super().mouseMoveEvent(
+            event
+        )
+
+    def mouseReleaseEvent(
+        self,
+        event,
+    ):
+        if (
+            event.button()
+            == Qt.RightButton
+            and self._planning_drag_active
+        ):
+            # mousePos is re-seeded in mousePressEvent, so no
+            # extra bookkeeping is needed here.
+            self._planning_drag_active = False
+            self._planning_drag_last_pos = None
+
+            event.accept()
+            return
+
+        super().mouseReleaseEvent(
+            event
+        )
+
+
 class Planning3DWidget(QWidget):
     """
     3D scanner-space planning viewer.
@@ -63,6 +227,13 @@ class Planning3DWidget(QWidget):
     # (about 2 mm for a 20 cm Localizer FOV).
     FOV_TRANSLATION_STEP_NORM = 0.01
     FOV_ROTATION_STEP_DEG = 5.0
+
+    # Mouse drag sensitivity for the right-drag FOV gesture.
+    #
+    # 10 px of drag == one MOVE toolbar step, and
+    # 25 px of drag == one ROT toolbar step.
+    FOV_DRAG_TRANSLATION_NORM_PER_PIXEL = 0.001
+    FOV_DRAG_ROTATION_DEG_PER_PIXEL = 0.2
 
     # Orthogonal preset views.
     #
@@ -101,7 +272,20 @@ class Planning3DWidget(QWidget):
 
         layout.setSpacing(0)
 
-        self.view = gl.GLViewWidget()
+        self.view = (
+            PlanningGLViewWidget()
+        )
+
+        self.view.planning_dragged.connect(
+            self._drag_fov
+        )
+
+        self.view.setToolTip(
+            "Left drag: orbit camera\n"
+            "Middle/Ctrl+Left: pan camera\n"
+            "Wheel: zoom\n"
+            "Right drag: edit selected FOV axis"
+        )
 
         self.view.setBackgroundColor(
             (0, 0, 0, 255)
@@ -265,7 +449,7 @@ class Planning3DWidget(QWidget):
         )
 
         self.fov_action_combo.setToolTip(
-            "3D FOV operation"
+            "FOV operation: use +/- or right-drag in 3D"
         )
 
         self.fov_action_combo.setMinimumWidth(
@@ -293,7 +477,7 @@ class Planning3DWidget(QWidget):
         )
 
         self.fov_axis_combo.setToolTip(
-            "Scanner axis"
+            "Scanner axis for MOVE / ROT"
         )
 
         self.fov_axis_combo.setMinimumWidth(
@@ -573,19 +757,37 @@ class Planning3DWidget(QWidget):
     # 3D FOV interaction
     # =====================================================
 
-    def _translate_fov_scanner_axis(
+    def _translate_fov_scanner_axis_delta(
         self,
         axis,
-        direction,
+        delta_norm,
     ):
         """
-        Translate the planned FOV along one scanner axis.
-
-        Box3D center coordinates are normalized scanner
-        X/Y/Z coordinates.
+        Translate the planned FOV by an arbitrary normalized
+        amount along one scanner/global axis.
         """
 
         if self.planning_state is None:
+            return
+
+        axis = str(
+            axis
+        ).upper()
+
+        if axis not in (
+            "X",
+            "Y",
+            "Z",
+        ):
+            return
+
+        delta_norm = float(
+            delta_norm
+        )
+
+        if not np.isfinite(
+            delta_norm
+        ):
             return
 
         box = (
@@ -593,14 +795,9 @@ class Planning3DWidget(QWidget):
             .fov_box
         )
 
-        step = (
-            float(direction)
-            * self.FOV_TRANSLATION_STEP_NORM
-        )
-
         attribute = (
             "center_"
-            + str(axis).lower()
+            + axis.lower()
         )
 
         setattr(
@@ -612,20 +809,36 @@ class Planning3DWidget(QWidget):
                     attribute,
                 )
             )
-            + step,
+            + delta_norm,
         )
 
         box.clamp()
 
-    def _rotate_fov_scanner_axis(
+    def _translate_fov_scanner_axis(
         self,
         axis,
         direction,
     ):
         """
-        Rotate the planned FOV around a scanner/global axis.
+        Apply one discrete toolbar translation step.
+        """
 
-        The incremental scanner rotation is pre-multiplied:
+        self._translate_fov_scanner_axis_delta(
+            axis,
+            float(direction)
+            * self.FOV_TRANSLATION_STEP_NORM,
+        )
+
+    def _rotate_fov_scanner_axis_delta(
+        self,
+        axis,
+        angle_deg,
+    ):
+        """
+        Rotate the planned FOV by an arbitrary angle around
+        one scanner/global axis.
+
+        Scanner-space incremental rotation is pre-multiplied:
 
             R_new = delta_R @ R_current
 
@@ -636,14 +849,29 @@ class Planning3DWidget(QWidget):
         if self.planning_state is None:
             return
 
+        axis = str(
+            axis
+        ).upper()
+
+        if axis not in (
+            "X",
+            "Y",
+            "Z",
+        ):
+            return
+
+        angle_deg = float(
+            angle_deg
+        )
+
+        if not np.isfinite(
+            angle_deg
+        ):
+            return
+
         box = (
             self.planning_state
             .fov_box
-        )
-
-        angle_deg = (
-            float(direction)
-            * self.FOV_ROTATION_STEP_DEG
         )
 
         current_rotation = (
@@ -680,7 +908,7 @@ class Planning3DWidget(QWidget):
                 )
             )
 
-        elif axis == "Z":
+        else:
 
             delta_rotation = (
                 planning_euler_to_matrix(
@@ -689,9 +917,6 @@ class Planning3DWidget(QWidget):
                     angle_deg,
                 )
             )
-
-        else:
-            return
 
         new_rotation = (
             delta_rotation
@@ -719,6 +944,88 @@ class Planning3DWidget(QWidget):
         )
 
         box.clamp()
+
+    def _rotate_fov_scanner_axis(
+        self,
+        axis,
+        direction,
+    ):
+        """
+        Apply one discrete toolbar rotation step.
+        """
+
+        self._rotate_fov_scanner_axis_delta(
+            axis,
+            float(direction)
+            * self.FOV_ROTATION_STEP_DEG,
+        )
+
+    def _drag_fov(
+        self,
+        delta_pixels,
+    ):
+        """
+        Apply an axis-constrained mouse drag to the planned FOV.
+
+        Horizontal right-drag is positive along the selected
+        scanner axis; left-drag is negative.
+        """
+
+        if self.planning_state is None:
+            return
+
+        delta_pixels = float(
+            delta_pixels
+        )
+
+        if (
+            not np.isfinite(
+                delta_pixels
+            )
+            or abs(delta_pixels) < 1e-6
+        ):
+            return
+
+        action = (
+            self.fov_action_combo
+            .currentText()
+        )
+
+        axis = (
+            self.fov_axis_combo
+            .currentText()
+        )
+
+        if action == "MOVE":
+
+            delta_norm = (
+                delta_pixels
+                * self.FOV_DRAG_TRANSLATION_NORM_PER_PIXEL
+            )
+
+            self._translate_fov_scanner_axis_delta(
+                axis,
+                delta_norm,
+            )
+
+        elif action == "ROT":
+
+            angle_deg = (
+                delta_pixels
+                * self.FOV_DRAG_ROTATION_DEG_PER_PIXEL
+            )
+
+            self._rotate_fov_scanner_axis_delta(
+                axis,
+                angle_deg,
+            )
+
+        else:
+            return
+
+        self.refresh_planning_geometry()
+
+        self.planning_changed.emit()
 
     def _nudge_fov(
         self,
