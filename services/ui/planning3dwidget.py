@@ -58,6 +58,16 @@ class PlanningGLViewWidget(
         float
     )
 
+    planning_handle_dragged = pyqtSignal(
+        str,
+        float,
+        float,
+    )
+
+    planning_handle_hovered = pyqtSignal(
+        object
+    )
+
     def __init__(
         self,
         parent=None,
@@ -68,6 +78,15 @@ class PlanningGLViewWidget(
 
         self._planning_drag_active = False
         self._planning_drag_last_pos = None
+
+        self._planning_handle_items = {}
+        self._active_planning_handle = None
+        self._planning_handle_last_pos = None
+        self._hovered_planning_handle = None
+
+        self.setMouseTracking(
+            True
+        )
 
     @staticmethod
     def _event_local_pos(
@@ -80,6 +99,61 @@ class PlanningGLViewWidget(
             return event.position()
 
         return event.localPos()
+
+    def register_planning_handle(
+        self,
+        item,
+        handle_id,
+    ):
+        """
+        Register one separately pickable GL item.
+
+        The GL view only knows the opaque handle ID.
+        It does not know PlanningState semantics.
+        """
+
+        self._planning_handle_items[
+            item
+        ] = str(
+            handle_id
+        )
+
+    def _pick_planning_handle(
+        self,
+        position,
+    ):
+        """
+        Pick the closest registered planning GL item around
+        the pointer using GLViewWidget's native OpenGL picking.
+        """
+
+        radius = 8
+
+        region = (
+            int(
+                position.x()
+            ) - radius,
+            int(
+                position.y()
+            ) - radius,
+            2 * radius,
+            2 * radius,
+        )
+
+        for item in self.itemsAt(
+            region
+        ):
+            handle_id = (
+                self._planning_handle_items
+                .get(
+                    item
+                )
+            )
+
+            if handle_id is not None:
+                return handle_id
+
+        return None
 
     def mousePressEvent(
         self,
@@ -94,6 +168,29 @@ class PlanningGLViewWidget(
         # Also reset pyqtgraph's camera-drag reference point,
         # preventing a jump when starting a new camera drag.
         self.mousePos = position
+
+        if (
+            event.button()
+            == Qt.LeftButton
+        ):
+            handle_id = (
+                self._pick_planning_handle(
+                    position
+                )
+            )
+
+            if handle_id is not None:
+
+                self._active_planning_handle = (
+                    handle_id
+                )
+
+                self._planning_handle_last_pos = (
+                    position
+                )
+
+                event.accept()
+                return
 
         if (
             event.button()
@@ -115,6 +212,81 @@ class PlanningGLViewWidget(
         self,
         event,
     ):
+        if (
+            event.buttons()
+            == Qt.NoButton
+        ):
+            position = (
+                self._event_local_pos(
+                    event
+                )
+            )
+
+            hovered = (
+                self._pick_planning_handle(
+                    position
+                )
+            )
+
+            if (
+                hovered
+                != self._hovered_planning_handle
+            ):
+                self._hovered_planning_handle = (
+                    hovered
+                )
+
+                self.planning_handle_hovered.emit(
+                    hovered
+                )
+
+        if (
+            self._active_planning_handle
+            is not None
+            and (
+                event.buttons()
+                & Qt.LeftButton
+            )
+        ):
+            position = (
+                self._event_local_pos(
+                    event
+                )
+            )
+
+            if (
+                self._planning_handle_last_pos
+                is None
+            ):
+                self._planning_handle_last_pos = (
+                    position
+                )
+
+                event.accept()
+                return
+
+            difference = (
+                position
+                - self._planning_handle_last_pos
+            )
+
+            self._planning_handle_last_pos = (
+                position
+            )
+
+            self.planning_handle_dragged.emit(
+                self._active_planning_handle,
+                float(
+                    difference.x()
+                ),
+                float(
+                    difference.y()
+                ),
+            )
+
+            event.accept()
+            return
+
         if (
             self._planning_drag_active
             and (
@@ -178,6 +350,18 @@ class PlanningGLViewWidget(
         self,
         event,
     ):
+        if (
+            event.button()
+            == Qt.LeftButton
+            and self._active_planning_handle
+            is not None
+        ):
+            self._active_planning_handle = None
+            self._planning_handle_last_pos = None
+
+            event.accept()
+            return
+
         if (
             event.button()
             == Qt.RightButton
@@ -259,6 +443,47 @@ class Planning3DWidget(QWidget):
     SAGITTAL_CAMERA_ELEVATION_DEG = 0.0
     SAGITTAL_CAMERA_AZIMUTH_DEG = 0.0
 
+    # FOV box-local face handles.
+    #
+    # axis index:
+    #   0 = box-local X
+    #   1 = box-local Y
+    #   2 = box-local Z
+    #
+    # sign = +/- face along that box-local axis.
+    FOV_FACE_HANDLE_SPECS = (
+        (
+            "face_x_neg",
+            0,
+            -1.0,
+        ),
+        (
+            "face_x_pos",
+            0,
+            1.0,
+        ),
+        (
+            "face_y_neg",
+            1,
+            -1.0,
+        ),
+        (
+            "face_y_pos",
+            1,
+            1.0,
+        ),
+        (
+            "face_z_neg",
+            2,
+            -1.0,
+        ),
+        (
+            "face_z_pos",
+            2,
+            1.0,
+        ),
+    )
+
     def __init__(self, parent=None):
         super().__init__(parent)
 
@@ -279,6 +504,14 @@ class Planning3DWidget(QWidget):
 
         self.view.planning_dragged.connect(
             self._drag_fov
+        )
+
+        self.view.planning_handle_dragged.connect(
+            self._drag_fov_face_handle
+        )
+
+        self.view.planning_handle_hovered.connect(
+            self._hover_fov_handle
         )
 
         self.view.setToolTip(
@@ -642,6 +875,52 @@ class Planning3DWidget(QWidget):
         self.view.addItem(
             self.fov_corner_handle_item
         )
+
+        self.fov_corner_positions_scanner_m = None
+
+        # One separately pickable handle per FOV face center.
+        self.fov_face_handle_items = {}
+
+        self.fov_face_handle_positions_scanner_m = {}
+
+        for (
+            handle_id,
+            axis_index,
+            sign,
+        ) in self.FOV_FACE_HANDLE_SPECS:
+
+            item = (
+                gl.GLScatterPlotItem(
+                    pos=np.zeros(
+                        (1, 3),
+                        dtype=float,
+                    ),
+                    color=(
+                        1.0,
+                        0.75,
+                        0.0,
+                        1.0,
+                    ),
+                    size=14.0,
+                    pxMode=True,
+                    glOptions="translucent",
+                )
+            )
+
+            item.hide()
+
+            self.view.addItem(
+                item
+            )
+
+            self.view.register_planning_handle(
+                item,
+                handle_id,
+            )
+
+            self.fov_face_handle_items[
+                handle_id
+            ] = item
 
         # Start from the same camera state used by HOME.
         self.reset_camera()
@@ -1057,6 +1336,341 @@ class Planning3DWidget(QWidget):
 
         self.planning_changed.emit()
 
+    def _face_handle_spec(
+        self,
+        handle_id,
+    ):
+        for (
+            current_id,
+            axis_index,
+            sign,
+        ) in self.FOV_FACE_HANDLE_SPECS:
+
+            if current_id == handle_id:
+                return (
+                    axis_index,
+                    sign,
+                )
+
+        return None
+
+    def _hover_fov_handle(
+        self,
+        handle_id,
+    ):
+        """
+        Highlight the currently pickable FOV face handle.
+        """
+
+        for (
+            current_id,
+            item,
+        ) in (
+            self.fov_face_handle_items
+            .items()
+        ):
+
+            if current_id == handle_id:
+
+                item.setData(
+                    color=(
+                        1.0,
+                        1.0,
+                        1.0,
+                        1.0,
+                    ),
+                    size=18.0,
+                    pxMode=True,
+                )
+
+            else:
+
+                item.setData(
+                    color=(
+                        1.0,
+                        0.75,
+                        0.0,
+                        1.0,
+                    ),
+                    size=14.0,
+                    pxMode=True,
+                )
+
+    def _drag_fov_face_handle(
+        self,
+        handle_id,
+        delta_x_pixels,
+        delta_y_pixels,
+    ):
+        """
+        Resize one FOV box-local axis by dragging a face handle.
+
+        The opposite face remains fixed.
+
+        Mouse motion is projected onto the selected face's
+        box-local outward normal as seen by the current camera.
+        """
+
+        if (
+            self.planning_state is None
+            or self.reference_fov_m is None
+        ):
+            return
+
+        spec = (
+            self._face_handle_spec(
+                handle_id
+            )
+        )
+
+        if spec is None:
+            return
+
+        (
+            axis_index,
+            sign,
+        ) = spec
+
+        box = (
+            self.planning_state
+            .fov_box
+        )
+
+        reference_fov_m = np.full(
+            3,
+            float(
+                self.reference_fov_m
+            ),
+            dtype=float,
+        )
+
+        scan_geometry = (
+            planning_box_to_scan_geometry(
+                fov_box=(
+                    box.as_dict()
+                ),
+                reference_fov_mm=(
+                    reference_fov_m
+                    * 1000.0
+                ),
+            )
+        )
+
+        rotation = np.asarray(
+            scan_geometry.rotation_local_to_scanner,
+            dtype=float,
+        )
+
+        local_axis = (
+            rotation[
+                :,
+                axis_index,
+            ]
+        )
+
+        outward_axis = (
+            float(sign)
+            * local_axis
+        )
+
+        face_position = (
+            np.asarray(
+                scan_geometry.center_scanner_m,
+                dtype=float,
+            )
+            + outward_axis
+            * 0.5
+            * float(
+                scan_geometry.fov_local_m[
+                    axis_index
+                ]
+            )
+        )
+
+        # Transform the outward axis into camera/view
+        # coordinates. w=0 means "direction", not a position.
+        axis_view = (
+            self.view.viewMatrix()
+            * QVector4D(
+                float(
+                    outward_axis[0]
+                ),
+                float(
+                    outward_axis[1]
+                ),
+                float(
+                    outward_axis[2]
+                ),
+                0.0,
+            )
+        )
+
+        screen_axis = np.array(
+            [
+                float(
+                    axis_view.x()
+                ),
+                -float(
+                    axis_view.y()
+                ),
+            ],
+            dtype=float,
+        )
+
+        screen_axis_length = float(
+            np.linalg.norm(
+                screen_axis
+            )
+        )
+
+        # Looking almost directly along this axis makes
+        # screen-space dragging ill-conditioned.
+        if screen_axis_length < 1e-6:
+            return
+
+        screen_axis /= (
+            screen_axis_length
+        )
+
+        mouse_delta = np.array(
+            [
+                float(
+                    delta_x_pixels
+                ),
+                float(
+                    delta_y_pixels
+                ),
+            ],
+            dtype=float,
+        )
+
+        delta_pixels = float(
+            np.dot(
+                mouse_delta,
+                screen_axis,
+            )
+        )
+
+        meters_per_pixel = float(
+            self.view.pixelSize(
+                QVector3D(
+                    float(
+                        face_position[0]
+                    ),
+                    float(
+                        face_position[1]
+                    ),
+                    float(
+                        face_position[2]
+                    ),
+                )
+            )
+        )
+
+        outward_delta_m = (
+            delta_pixels
+            * meters_per_pixel
+        )
+
+        size_attribute = (
+            (
+                "size_x",
+                "size_y",
+                "size_z",
+            )[
+                axis_index
+            ]
+        )
+
+        size_delta_norm = (
+            outward_delta_m
+            / reference_fov_m[
+                axis_index
+            ]
+        )
+
+        current_size = float(
+            getattr(
+                box,
+                size_attribute,
+            )
+        )
+
+        # Respect Box3D's existing size contract before
+        # applying the center shift.
+        new_size = float(
+            np.clip(
+                current_size
+                + size_delta_norm,
+                0.02,
+                1.0,
+            )
+        )
+
+        actual_size_delta_norm = (
+            new_size
+            - current_size
+        )
+
+        actual_delta_m = (
+            actual_size_delta_norm
+            * reference_fov_m[
+                axis_index
+            ]
+        )
+
+        setattr(
+            box,
+            size_attribute,
+            new_size,
+        )
+
+        center_norm = np.array(
+            [
+                float(
+                    box.center_x
+                ),
+                float(
+                    box.center_y
+                ),
+                float(
+                    box.center_z
+                ),
+            ],
+            dtype=float,
+        )
+
+        # Moving one face by d moves the center by d/2.
+        # outward_axis is expressed in scanner XYZ.
+        center_delta_norm = (
+            0.5
+            * actual_delta_m
+            * outward_axis
+            / reference_fov_m
+        )
+
+        center_norm += (
+            center_delta_norm
+        )
+
+        box.center_x = float(
+            center_norm[0]
+        )
+
+        box.center_y = float(
+            center_norm[1]
+        )
+
+        box.center_z = float(
+            center_norm[2]
+        )
+
+        box.clamp()
+
+        self.refresh_planning_geometry()
+
+        self.planning_changed.emit()
+
     def _nudge_fov(
         self,
         direction,
@@ -1232,6 +1846,14 @@ class Planning3DWidget(QWidget):
         self.fov_corner_handle_item.hide()
 
         self.fov_corner_positions_scanner_m = None
+
+        for item in (
+            self.fov_face_handle_items
+            .values()
+        ):
+            item.hide()
+
+        self.fov_face_handle_positions_scanner_m = {}
 
     # =====================================================
     # Localizer planes
@@ -1844,6 +2466,13 @@ class Planning3DWidget(QWidget):
         ):
             self.fov_wireframe_item.hide()
             self.fov_corner_handle_item.hide()
+
+            for item in (
+                self.fov_face_handle_items
+                .values()
+            ):
+                item.hide()
+
             return
 
         if (
@@ -1852,6 +2481,13 @@ class Planning3DWidget(QWidget):
         ):
             self.fov_wireframe_item.hide()
             self.fov_corner_handle_item.hide()
+
+            for item in (
+                self.fov_face_handle_items
+                .values()
+            ):
+                item.hide()
+
             return
 
         reference_fov_mm = np.full(
@@ -1941,3 +2577,70 @@ class Planning3DWidget(QWidget):
         )
 
         self.fov_corner_handle_item.show()
+
+        center = np.asarray(
+            scan_geometry.center_scanner_m,
+            dtype=float,
+        )
+
+        sizes = np.asarray(
+            scan_geometry.fov_local_m,
+            dtype=float,
+        )
+
+        rotation = np.asarray(
+            scan_geometry.rotation_local_to_scanner,
+            dtype=float,
+        )
+
+        for (
+            handle_id,
+            axis_index,
+            sign,
+        ) in self.FOV_FACE_HANDLE_SPECS:
+
+            local_axis_scanner = (
+                rotation[
+                    :,
+                    axis_index,
+                ]
+            )
+
+            face_position = (
+                center
+                + float(sign)
+                * 0.5
+                * sizes[
+                    axis_index
+                ]
+                * local_axis_scanner
+            )
+
+            self.fov_face_handle_positions_scanner_m[
+                handle_id
+            ] = (
+                face_position.copy()
+            )
+
+            self.fov_face_handle_items[
+                handle_id
+            ].setData(
+                pos=np.asarray(
+                    [
+                        face_position
+                    ],
+                    dtype=float,
+                ),
+                color=(
+                    1.0,
+                    0.75,
+                    0.0,
+                    1.0,
+                ),
+                size=14.0,
+                pxMode=True,
+            )
+
+            self.fov_face_handle_items[
+                handle_id
+            ].show()
