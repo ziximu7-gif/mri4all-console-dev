@@ -928,7 +928,7 @@ class Planning3DWidget(QWidget):
                     1.0,
                     1.0,
                     0.0,
-                    0.22,
+                    0.35,
                 ),
                 width=2,
                 antialias=True,
