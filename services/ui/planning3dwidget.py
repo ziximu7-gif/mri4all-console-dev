@@ -38,6 +38,7 @@ from common.geometry import (
     scan_geometry_box_edges_scanner_m,
     planning_euler_to_matrix,
     planning_matrix_to_euler,
+    localizer_orientation_marker_xy,
 )
 
 
@@ -930,6 +931,12 @@ class Planning3DWidget(QWidget):
 
         # Real Localizer textures placed in scanner XYZ.
         self.localizer_image_items = []
+
+        # Asymmetric orientation fiducial per placed Localizer
+        # plane.
+        #
+        # This is NOT the image origin and NOT scanner isocenter.
+        self.localizer_orientation_marker_items = []
 
         # One GLLinePlotItem contains all 12 FOV edges.
         #
@@ -3026,6 +3033,31 @@ class Planning3DWidget(QWidget):
 
         self.localizer_image_items = []
 
+        for item in (
+            self.localizer_orientation_marker_items
+        ):
+            try:
+                self.view.removeItem(
+                    item
+                )
+            except Exception:
+                pass
+
+        self.localizer_orientation_marker_items = []
+
+    @staticmethod
+    def _localizer_orientation_marker_xy(
+        image_array,
+    ):
+        """
+        Wrapper around the shared Localizer orientation
+        fiducial rule so 2D and 3D views cannot diverge.
+        """
+
+        return localizer_orientation_marker_xy(
+            image_array
+        )
+
     @staticmethod
     def _localizer_image_to_rgba(
         image_array,
@@ -3399,6 +3431,54 @@ class Planning3DWidget(QWidget):
             self.localizer_image_items.append(
                 image_item
             )
+
+            marker_image_xy = (
+                self._localizer_orientation_marker_xy(
+                    image_array
+                )
+            )
+
+            if marker_image_xy is not None:
+
+                marker_scanner_m = (
+                    image_plane.image_xy_to_scanner_m(
+                        marker_image_xy
+                    )
+                )
+
+                marker_item = (
+                    gl.GLScatterPlotItem(
+                        pos=np.asarray(
+                            [
+                                marker_scanner_m
+                            ],
+                            dtype=float,
+                        ),
+                        color=(
+                            0.55,
+                            0.55,
+                            0.55,
+                            1.0,
+                        ),
+                        size=8.0,
+                        pxMode=True,
+                        glOptions=(
+                            PLANNING_OVERLAY_GL_OPTIONS
+                        ),
+                    )
+                )
+
+                marker_item.setDepthValue(
+                    6
+                )
+
+                self.view.addItem(
+                    marker_item
+                )
+
+                self.localizer_orientation_marker_items.append(
+                    marker_item
+                )
 
             image_count += 1
 
