@@ -1221,6 +1221,17 @@ class ExaminationWindow(QMainWindow):
             other_data
         )
 
+        refresh_planning_ui = getattr(
+            ui_runtime.editor_sequence_instance,
+            "refresh_planning_ui",
+            None,
+        )
+
+        if callable(
+            refresh_planning_ui
+        ):
+            refresh_planning_ui()
+
         log.info(
             "Copied localizer FOV to current scan: "
             + str(fov_box)

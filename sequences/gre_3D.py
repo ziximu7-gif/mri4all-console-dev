@@ -30,6 +30,11 @@ from sequences.common.planning import (
     resolve_task_planning,
 )
 
+from common.geometry import (
+    cm_to_m,
+    planning_matrix_to_euler,
+)
+
 
 log = logger.get_logger()
 
@@ -48,6 +53,12 @@ class SequenceGRE_3D(PulseqSequence, registry_key=Path(__file__).stem):
     param_dummy_shots: int = 20
     param_readout_direction: str = ("Horizontal")
 
+    # UI-only reference to the currently edited ScanTask.
+    #
+    # Not persistent state. Used only to derive the
+    # read-only geometry display in the parameter UI.
+    _ui_scan_task = None
+
     @classmethod
     def get_readable_name(self) -> str:
         return "3D Gradient Echo"
@@ -61,35 +72,326 @@ class SequenceGRE_3D(PulseqSequence, registry_key=Path(__file__).stem):
         uic.loadUi(f"{seq_path}/{self.get_name()}/interface.ui", widget)
 
         widget.TR_SpinBox.valueChanged.connect(self.update_info)
+        widget.FOV_SpinBox.valueChanged.connect(self.update_info)
         widget.Baseresolution_SpinBox.valueChanged.connect(self.update_info)
         widget.Slices_SpinBox.valueChanged.connect(self.update_info)
+        widget.Orientation_ComboBox.currentTextChanged.connect(self.update_info)
+        widget.ReadoutDirection_ComboBox.currentTextChanged.connect(
+            self.update_info
+        )
         return True
 
+    def _current_geometry_ui_values(
+        self,
+    ):
+        """
+        Resolve the geometry that would actually be used by
+        GRE acquisition for the current parameter UI state.
+
+        Planning geometry takes precedence over the legacy
+        scalar FOV parameter.
+        """
+
+        widget = self.main_widget
+
+        orientation = (
+            widget
+            .Orientation_ComboBox
+            .currentText()
+        )
+
+        readout_direction = (
+            widget
+            .ReadoutDirection_ComboBox
+            .currentText()
+        )
+
+        scan_task = getattr(
+            self,
+            "_ui_scan_task",
+            None,
+        )
+
+        planned_geometry = None
+        planned_encoding = None
+
+        if scan_task is not None:
+
+            try:
+                (
+                    planned_geometry,
+                    planned_encoding,
+                ) = resolve_task_planning(
+                    scan_task=scan_task,
+                    orientation=orientation,
+                    readout_direction=(
+                        readout_direction
+                    ),
+                )
+
+            except (
+                KeyError,
+                TypeError,
+                ValueError,
+            ) as exc:
+
+                log.warning(
+                    "Unable to resolve planned GRE geometry "
+                    "for parameter UI: "
+                    + str(exc)
+                )
+
+        if (
+            planned_geometry is not None
+            and planned_encoding is not None
+        ):
+
+            fov_m = np.asarray(
+                planned_encoding.fov_logical_m,
+                dtype=float,
+            )
+
+            center_mm = (
+                np.asarray(
+                    planned_geometry.center_scanner_m,
+                    dtype=float,
+                )
+                * 1000.0
+            )
+
+            rotation_deg = np.asarray(
+                planning_matrix_to_euler(
+                    planned_geometry
+                    .rotation_local_to_scanner
+                ),
+                dtype=float,
+            )
+
+            planning_active = True
+
+        else:
+
+            # Legacy GRE behavior:
+            #
+            # read  = FOV
+            # phase = FOV
+            # third = FOV / 2
+            base_fov_m = float(
+                cm_to_m(
+                    widget.FOV_SpinBox.value()
+                )
+            )
+
+            fov_m = np.array(
+                [
+                    base_fov_m,
+                    base_fov_m,
+                    0.5 * base_fov_m,
+                ],
+                dtype=float,
+            )
+
+            center_mm = None
+            rotation_deg = None
+            planning_active = False
+
+        base_resolution = max(
+            1,
+            int(
+                widget
+                .Baseresolution_SpinBox
+                .value()
+            ),
+        )
+
+        partitions = max(
+            1,
+            int(
+                widget
+                .Slices_SpinBox
+                .value()
+            ),
+        )
+
+        voxel_mm = (
+            fov_m
+            * 1000.0
+            / np.array(
+                [
+                    base_resolution,
+                    base_resolution,
+                    partitions,
+                ],
+                dtype=float,
+            )
+        )
+
+        phase_percent = (
+            100.0
+            * float(fov_m[1])
+            / float(fov_m[0])
+        )
+
+        return {
+            "planning_active": (
+                planning_active
+            ),
+            "fov_m": fov_m,
+            "center_mm": center_mm,
+            "rotation_deg": rotation_deg,
+            "phase_percent": (
+                phase_percent
+            ),
+            "voxel_mm": voxel_mm,
+        }
+
+    def refresh_planning_ui(
+        self,
+    ):
+        """
+        Refresh read-only physical geometry derived from the
+        current ScanTask and sequence encoding parameters.
+        """
+
+        widget = self.main_widget
+
+        values = (
+            self._current_geometry_ui_values()
+        )
+
+        planning_active = bool(
+            values[
+                "planning_active"
+            ]
+        )
+
+        fov_m = values[
+            "fov_m"
+        ]
+
+        voxel_mm = values[
+            "voxel_mm"
+        ]
+
+        if planning_active:
+
+            widget.PlanningSource_Value.setText(
+                "From Localizer Planning"
+            )
+
+            center_mm = values[
+                "center_mm"
+            ]
+
+            widget.PlanningPosition_Value.setText(
+                "X "
+                f"{float(center_mm[0]):+.1f}"
+                "  Y "
+                f"{float(center_mm[1]):+.1f}"
+                "  Z "
+                f"{float(center_mm[2]):+.1f}"
+                " mm"
+            )
+
+            rotation_deg = values[
+                "rotation_deg"
+            ]
+
+            widget.PlanningRotation_Value.setText(
+                "Rx "
+                f"{float(rotation_deg[0]):+.1f}"
+                "  Ry "
+                f"{float(rotation_deg[1]):+.1f}"
+                "  Rz "
+                f"{float(rotation_deg[2]):+.1f}"
+                " \u00b0"
+            )
+
+        else:
+
+            widget.PlanningSource_Value.setText(
+                "Legacy sequence geometry"
+            )
+
+            widget.PlanningPosition_Value.setText(
+                "-"
+            )
+
+            widget.PlanningRotation_Value.setText(
+                "-"
+            )
+
+        widget.FOV_SpinBox.setEnabled(
+            not planning_active
+        )
+
+        widget.PlanningFOVRead_Value.setText(
+            f"{float(fov_m[0]) * 1000.0:.1f} mm"
+        )
+
+        widget.PlanningFOVPhase_Value.setText(
+            f"{float(values['phase_percent']):.1f} %"
+        )
+
+        widget.PlanningSlabThickness_Value.setText(
+            f"{float(fov_m[2]) * 1000.0:.1f} mm"
+        )
+
+        widget.PlanningVoxelSize_Value.setText(
+            f"{float(voxel_mm[0]):.2f}"
+            " \u00d7 "
+            f"{float(voxel_mm[1]):.2f}"
+            " \u00d7 "
+            f"{float(voxel_mm[2]):.2f}"
+            " mm"
+        )
+
+        return values
+
     def update_info(self):
+
+        widget = self.main_widget
+
         duration_sec = int(
-            self.main_widget.TR_SpinBox.value()
+            widget.TR_SpinBox.value()
             * (
-                self.main_widget.Baseresolution_SpinBox.value()
-                * self.main_widget.Slices_SpinBox.value()
+                widget
+                .Baseresolution_SpinBox
+                .value()
+                * widget
+                .Slices_SpinBox
+                .value()
                 + self.param_dummy_shots
             )
             / 1000
         )
-        duration = str(datetime.timedelta(seconds=duration_sec))
 
-        res_slice = (
-            self.main_widget.FOV_SpinBox.value()
-            / self.main_widget.Slices_SpinBox.value()
-            * 10
+        duration = str(
+            datetime.timedelta(
+                seconds=duration_sec
+            )
         )
-        res_inplane = (
-            self.main_widget.FOV_SpinBox.value()
-            / self.main_widget.Baseresolution_SpinBox.value()
-            * 10
+
+        values = (
+            self.refresh_planning_ui()
         )
+
+        voxel_mm = values[
+            "voxel_mm"
+        ]
 
         self.show_ui_info_text(
-            f"TA: {duration} sec       Voxel Size: {res_inplane:.2f} x {res_inplane:.2f} x {res_slice:.2f} mm"
+            (
+                f"TA: {duration} sec"
+                "       "
+                "Voxel Size: "
+                f"{float(voxel_mm[0]):.2f}"
+                " x "
+                f"{float(voxel_mm[1]):.2f}"
+                " x "
+                f"{float(voxel_mm[2]):.2f}"
+                " mm"
+            )
         )
 
     def get_parameters(self) -> dict:
@@ -129,6 +431,14 @@ class SequenceGRE_3D(PulseqSequence, registry_key=Path(__file__).stem):
 
     def set_parameters(self, parameters, scan_task) -> bool:
         self.problem_list = []
+
+        # Keep the currently edited ScanTask only for
+        # derived geometry display in the parameter UI.
+        #
+        # The ScanTask remains the source of planning geometry;
+        # no geometry is copied into sequence parameters here.
+        self._ui_scan_task = scan_task
+
         try:
             self.param_TE = parameters["TE"]
             self.param_TR = parameters["TR"]
@@ -160,10 +470,14 @@ class SequenceGRE_3D(PulseqSequence, registry_key=Path(__file__).stem):
         widget.Trajectory_ComboBox.setCurrentText(self.param_trajectory)
         widget.Ordering_ComboBox.setCurrentText(self.param_ordering)
         widget.ReadoutDirection_ComboBox.setCurrentText(self.param_readout_direction)
+
+        self.update_info()
+
         return True
 
     def read_parameters_from_ui(self, widget, scan_task) -> bool:
         self.problem_list = []
+        self._ui_scan_task = scan_task
         self.param_TE = widget.TE_SpinBox.value()
         self.param_TR = widget.TR_SpinBox.value()
         self.param_NSA = widget.NSA_SpinBox.value()
