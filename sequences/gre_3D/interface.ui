@@ -316,33 +316,109 @@
        </widget>
       </item>
       <item row="9" column="0">
-       <widget class="QLabel" name="label_planning_position">
+       <widget class="QLabel" name="label_planning_position_x">
         <property name="text">
-         <string>Position XYZ</string>
+         <string>Position X</string>
         </property>
        </widget>
       </item>
       <item row="9" column="1">
-       <widget class="QLabel" name="PlanningPosition_Value">
+       <widget class="QDoubleSpinBox" name="PlanningPositionX_Value">
         <property name="minimumSize">
          <size>
           <width>120</width>
           <height>0</height>
          </size>
         </property>
-        <property name="text">
-         <string>X +0.0  Y +0.0  Z +0.0 mm</string>
+        <property name="decimals">
+         <number>1</number>
+        </property>
+        <property name="minimum">
+         <double>-1000.000000000000000</double>
+        </property>
+        <property name="maximum">
+         <double>1000.000000000000000</double>
+        </property>
+        <property name="singleStep">
+         <double>1.000000000000000</double>
+        </property>
+        <property name="suffix">
+         <string> mm</string>
         </property>
        </widget>
       </item>
       <item row="10" column="0">
+       <widget class="QLabel" name="label_planning_position_y">
+        <property name="text">
+         <string>Position Y</string>
+        </property>
+       </widget>
+      </item>
+      <item row="10" column="1">
+       <widget class="QDoubleSpinBox" name="PlanningPositionY_Value">
+        <property name="minimumSize">
+         <size>
+          <width>120</width>
+          <height>0</height>
+         </size>
+        </property>
+        <property name="decimals">
+         <number>1</number>
+        </property>
+        <property name="minimum">
+         <double>-1000.000000000000000</double>
+        </property>
+        <property name="maximum">
+         <double>1000.000000000000000</double>
+        </property>
+        <property name="singleStep">
+         <double>1.000000000000000</double>
+        </property>
+        <property name="suffix">
+         <string> mm</string>
+        </property>
+       </widget>
+      </item>
+      <item row="11" column="0">
+       <widget class="QLabel" name="label_planning_position_z">
+        <property name="text">
+         <string>Position Z</string>
+        </property>
+       </widget>
+      </item>
+      <item row="11" column="1">
+       <widget class="QDoubleSpinBox" name="PlanningPositionZ_Value">
+        <property name="minimumSize">
+         <size>
+          <width>120</width>
+          <height>0</height>
+         </size>
+        </property>
+        <property name="decimals">
+         <number>1</number>
+        </property>
+        <property name="minimum">
+         <double>-1000.000000000000000</double>
+        </property>
+        <property name="maximum">
+         <double>1000.000000000000000</double>
+        </property>
+        <property name="singleStep">
+         <double>1.000000000000000</double>
+        </property>
+        <property name="suffix">
+         <string> mm</string>
+        </property>
+       </widget>
+      </item>
+      <item row="12" column="0">
        <widget class="QLabel" name="label_planning_rotation">
         <property name="text">
          <string>Rotation XYZ</string>
         </property>
        </widget>
       </item>
-      <item row="10" column="1">
+      <item row="12" column="1">
        <widget class="QLabel" name="PlanningRotation_Value">
         <property name="minimumSize">
          <size>
@@ -355,14 +431,14 @@
         </property>
        </widget>
       </item>
-      <item row="11" column="0">
+      <item row="13" column="0">
        <widget class="QLabel" name="label_planning_fov_read">
         <property name="text">
          <string>FoV Read</string>
         </property>
        </widget>
       </item>
-      <item row="11" column="1">
+      <item row="13" column="1">
        <widget class="QDoubleSpinBox" name="PlanningFOVRead_Value">
         <property name="minimumSize">
          <size>
@@ -387,14 +463,14 @@
         </property>
        </widget>
       </item>
-      <item row="12" column="0">
+      <item row="14" column="0">
        <widget class="QLabel" name="label_planning_fov_phase">
         <property name="text">
          <string>FoV Phase</string>
         </property>
        </widget>
       </item>
-      <item row="12" column="1">
+      <item row="14" column="1">
        <widget class="QDoubleSpinBox" name="PlanningFOVPhase_Value">
         <property name="minimumSize">
          <size>
@@ -419,14 +495,14 @@
         </property>
        </widget>
       </item>
-      <item row="13" column="0">
+      <item row="15" column="0">
        <widget class="QLabel" name="label_planning_slab_thickness">
         <property name="text">
          <string>Slab Thickness</string>
         </property>
        </widget>
       </item>
-      <item row="13" column="1">
+      <item row="15" column="1">
        <widget class="QDoubleSpinBox" name="PlanningSlabThickness_Value">
         <property name="minimumSize">
          <size>
@@ -451,14 +527,14 @@
         </property>
        </widget>
       </item>
-      <item row="14" column="0">
+      <item row="16" column="0">
        <widget class="QLabel" name="label_planning_voxel_size">
         <property name="text">
          <string>Voxel Size</string>
         </property>
        </widget>
       </item>
-      <item row="14" column="1">
+      <item row="16" column="1">
        <widget class="QLabel" name="PlanningVoxelSize_Value">
         <property name="minimumSize">
          <size>
@@ -471,7 +547,7 @@
         </property>
        </widget>
       </item>
-      <item row="15" column="0">
+      <item row="17" column="0">
        <spacer name="verticalSpacer_2">
         <property name="orientation">
          <enum>Qt::Vertical</enum>

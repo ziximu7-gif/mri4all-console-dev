@@ -94,6 +94,18 @@ class SequenceGRE_3D(PulseqSequence, registry_key=Path(__file__).stem):
         widget.PlanningSlabThickness_Value.valueChanged.connect(
             self._planned_fov_ui_changed
         )
+
+        widget.PlanningPositionX_Value.valueChanged.connect(
+            self._planned_position_ui_changed
+        )
+
+        widget.PlanningPositionY_Value.valueChanged.connect(
+            self._planned_position_ui_changed
+        )
+
+        widget.PlanningPositionZ_Value.valueChanged.connect(
+            self._planned_position_ui_changed
+        )
         return True
 
     def _current_geometry_ui_values(
@@ -294,20 +306,6 @@ class SequenceGRE_3D(PulseqSequence, registry_key=Path(__file__).stem):
                 "From Localizer Planning"
             )
 
-            center_mm = values[
-                "center_mm"
-            ]
-
-            widget.PlanningPosition_Value.setText(
-                "X "
-                f"{float(center_mm[0]):+.1f}"
-                "  Y "
-                f"{float(center_mm[1]):+.1f}"
-                "  Z "
-                f"{float(center_mm[2]):+.1f}"
-                " mm"
-            )
-
             rotation_deg = values[
                 "rotation_deg"
             ]
@@ -328,12 +326,134 @@ class SequenceGRE_3D(PulseqSequence, registry_key=Path(__file__).stem):
                 "Legacy sequence geometry"
             )
 
-            widget.PlanningPosition_Value.setText(
+            widget.PlanningRotation_Value.setText(
                 "-"
             )
 
-            widget.PlanningRotation_Value.setText(
-                "-"
+        position_widgets = (
+            widget.PlanningPositionX_Value,
+            widget.PlanningPositionY_Value,
+            widget.PlanningPositionZ_Value,
+        )
+
+        if planning_active:
+
+            center_mm = values[
+                "center_mm"
+            ]
+
+            for current_widget in position_widgets:
+                current_widget.blockSignals(
+                    True
+                )
+
+            try:
+
+                widget.PlanningPositionX_Value.setValue(
+                    float(
+                        center_mm[0]
+                    )
+                )
+
+                widget.PlanningPositionY_Value.setValue(
+                    float(
+                        center_mm[1]
+                    )
+                )
+
+                widget.PlanningPositionZ_Value.setValue(
+                    float(
+                        center_mm[2]
+                    )
+                )
+
+            finally:
+
+                for current_widget in position_widgets:
+                    current_widget.blockSignals(
+                        False
+                    )
+
+            reference_fov_mm = np.asarray(
+                self._ui_scan_task
+                .other[
+                    "geometry"
+                ][
+                    "reference_fov_mm"
+                ],
+                dtype=float,
+            )
+
+            size_norm = np.array(
+                [
+                    float(
+                        self._ui_scan_task
+                        .other["geometry"]
+                        ["fov_box"]["size_x"]
+                    ),
+                    float(
+                        self._ui_scan_task
+                        .other["geometry"]
+                        ["fov_box"]["size_y"]
+                    ),
+                    float(
+                        self._ui_scan_task
+                        .other["geometry"]
+                        ["fov_box"]["size_z"]
+                    ),
+                ],
+                dtype=float,
+            )
+
+            half_available_mm = (
+                0.5
+                * reference_fov_mm
+                * (
+                    1.0
+                    - size_norm
+                )
+            )
+
+            for (
+                position_widget,
+                limit_mm,
+            ) in zip(
+                position_widgets,
+                half_available_mm,
+            ):
+
+                position_widget.setMinimum(
+                    -float(
+                        limit_mm
+                    )
+                )
+
+                position_widget.setMaximum(
+                    float(
+                        limit_mm
+                    )
+                )
+
+        else:
+
+            for current_widget in position_widgets:
+
+                current_widget.blockSignals(
+                    True
+                )
+
+                try:
+                    current_widget.setValue(
+                        0.0
+                    )
+                finally:
+                    current_widget.blockSignals(
+                        False
+                    )
+
+        for current_widget in position_widgets:
+            current_widget.setEnabled(
+                planning_active
             )
 
         widget.FOV_SpinBox.setEnabled(
@@ -612,6 +732,185 @@ class SequenceGRE_3D(PulseqSequence, registry_key=Path(__file__).stem):
             "size_z"
         ] = float(
             candidate_size_norm[2]
+        )
+
+        self.update_info()
+
+    def _planned_position_ui_changed(
+        self,
+    ):
+        """
+        Write scanner-space FOV center position back into the
+        copied planning geometry of the currently edited GRE
+        task.
+
+        Position controls are expressed in scanner X/Y/Z [mm].
+        """
+
+        scan_task = getattr(
+            self,
+            "_ui_scan_task",
+            None,
+        )
+
+        if scan_task is None:
+            return
+
+        geometry_data = (
+            scan_task.other.get(
+                "geometry"
+            )
+        )
+
+        if not isinstance(
+            geometry_data,
+            dict,
+        ):
+            return
+
+        fov_box = geometry_data.get(
+            "fov_box"
+        )
+
+        reference_fov_mm = (
+            geometry_data.get(
+                "reference_fov_mm"
+            )
+        )
+
+        if (
+            not isinstance(
+                fov_box,
+                dict,
+            )
+            or reference_fov_mm is None
+        ):
+            return
+
+        widget = self.main_widget
+
+        candidate_center_scanner_m = (
+            np.array(
+                [
+                    float(
+                        widget
+                        .PlanningPositionX_Value
+                        .value()
+                    ),
+                    float(
+                        widget
+                        .PlanningPositionY_Value
+                        .value()
+                    ),
+                    float(
+                        widget
+                        .PlanningPositionZ_Value
+                        .value()
+                    ),
+                ],
+                dtype=float,
+            )
+            / 1000.0
+        )
+
+        reference_fov_m = np.asarray(
+            mm_to_m(
+                reference_fov_mm
+            ),
+            dtype=float,
+        )
+
+        if reference_fov_m.shape != (3,):
+            self.refresh_planning_ui()
+            return
+
+        if (
+            not np.all(
+                np.isfinite(
+                    reference_fov_m
+                )
+            )
+            or np.any(
+                reference_fov_m
+                <= 0
+            )
+        ):
+            self.refresh_planning_ui()
+            return
+
+        candidate_center_norm = (
+            0.5
+            + candidate_center_scanner_m
+            / reference_fov_m
+        )
+
+        current_size_norm = np.array(
+            [
+                float(
+                    fov_box[
+                        "size_x"
+                    ]
+                ),
+                float(
+                    fov_box[
+                        "size_y"
+                    ]
+                ),
+                float(
+                    fov_box[
+                        "size_z"
+                    ]
+                ),
+            ],
+            dtype=float,
+        )
+
+        minimum_center = (
+            0.5
+            * current_size_norm
+        )
+
+        maximum_center = (
+            1.0
+            - 0.5
+            * current_size_norm
+        )
+
+        if (
+            np.any(
+                candidate_center_norm
+                < minimum_center
+            )
+            or np.any(
+                candidate_center_norm
+                > maximum_center
+            )
+        ):
+
+            log.warning(
+                "Requested planned FOV position would "
+                "exceed the current planning bounds."
+            )
+
+            self.refresh_planning_ui()
+            return
+
+        fov_box[
+            "center_x"
+        ] = float(
+            candidate_center_norm[0]
+        )
+
+        fov_box[
+            "center_y"
+        ] = float(
+            candidate_center_norm[1]
+        )
+
+        fov_box[
+            "center_z"
+        ] = float(
+            candidate_center_norm[2]
         )
 
         self.update_info()
