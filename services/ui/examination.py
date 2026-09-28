@@ -1033,8 +1033,28 @@ class ExaminationWindow(QMainWindow):
             ui_runtime.editor_scantask.parameters = (
                 ui_runtime.editor_sequence_instance.get_parameters()
             )
-            ui_runtime.editor_scantask.other = json.loads(
+
+            other_data = json.loads(
                 self.otherParametersTextEdit.toPlainText()
+            )
+
+            merge_ui_other_parameters = getattr(
+                ui_runtime.editor_sequence_instance,
+                "merge_ui_other_parameters",
+                None,
+            )
+
+            if callable(
+                merge_ui_other_parameters
+            ):
+                other_data = (
+                    merge_ui_other_parameters(
+                        other_data
+                    )
+                )
+
+            ui_runtime.editor_scantask.other = (
+                other_data
             )
             # Store the current exam planning geometry with the scan task.
             if (

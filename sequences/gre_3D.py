@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+import copy
 import datetime
 
 import numpy as np
@@ -32,6 +33,8 @@ from sequences.common.planning import (
 
 from common.geometry import (
     cm_to_m,
+    mm_to_m,
+    orientation_encoding_matrix,
     planning_matrix_to_euler,
 )
 
@@ -78,6 +81,18 @@ class SequenceGRE_3D(PulseqSequence, registry_key=Path(__file__).stem):
         widget.Orientation_ComboBox.currentTextChanged.connect(self.update_info)
         widget.ReadoutDirection_ComboBox.currentTextChanged.connect(
             self.update_info
+        )
+
+        widget.PlanningFOVRead_Value.valueChanged.connect(
+            self._planned_fov_ui_changed
+        )
+
+        widget.PlanningFOVPhase_Value.valueChanged.connect(
+            self._planned_fov_ui_changed
+        )
+
+        widget.PlanningSlabThickness_Value.valueChanged.connect(
+            self._planned_fov_ui_changed
         )
         return True
 
@@ -325,17 +340,48 @@ class SequenceGRE_3D(PulseqSequence, registry_key=Path(__file__).stem):
             not planning_active
         )
 
-        widget.PlanningFOVRead_Value.setText(
-            f"{float(fov_m[0]) * 1000.0:.1f} mm"
+        fov_widgets = (
+            widget.PlanningFOVRead_Value,
+            widget.PlanningFOVPhase_Value,
+            widget.PlanningSlabThickness_Value,
         )
 
-        widget.PlanningFOVPhase_Value.setText(
-            f"{float(values['phase_percent']):.1f} %"
-        )
+        for current_widget in fov_widgets:
+            current_widget.blockSignals(
+                True
+            )
 
-        widget.PlanningSlabThickness_Value.setText(
-            f"{float(fov_m[2]) * 1000.0:.1f} mm"
-        )
+        try:
+
+            widget.PlanningFOVRead_Value.setValue(
+                float(fov_m[0])
+                * 1000.0
+            )
+
+            widget.PlanningFOVPhase_Value.setValue(
+                float(
+                    values[
+                        "phase_percent"
+                    ]
+                )
+            )
+
+            widget.PlanningSlabThickness_Value.setValue(
+                float(fov_m[2])
+                * 1000.0
+            )
+
+        finally:
+
+            for current_widget in fov_widgets:
+                current_widget.blockSignals(
+                    False
+                )
+
+        for current_widget in fov_widgets:
+            current_widget.setEnabled(
+                planning_active
+            )
 
         widget.PlanningVoxelSize_Value.setText(
             f"{float(voxel_mm[0]):.2f}"
@@ -347,6 +393,270 @@ class SequenceGRE_3D(PulseqSequence, registry_key=Path(__file__).stem):
         )
 
         return values
+
+    def _planned_fov_ui_changed(
+        self,
+    ):
+        """
+        Write editable logical FOV values back into the
+        copied planning geometry of the currently edited GRE
+        task.
+
+        This modifies the GRE task's geometry copy, not the
+        source Localizer PlanningState.
+        """
+
+        scan_task = getattr(
+            self,
+            "_ui_scan_task",
+            None,
+        )
+
+        if scan_task is None:
+            return
+
+        geometry_data = (
+            scan_task.other.get(
+                "geometry"
+            )
+        )
+
+        if not isinstance(
+            geometry_data,
+            dict,
+        ):
+            return
+
+        fov_box = geometry_data.get(
+            "fov_box"
+        )
+
+        reference_fov_mm = (
+            geometry_data.get(
+                "reference_fov_mm"
+            )
+        )
+
+        if (
+            not isinstance(
+                fov_box,
+                dict,
+            )
+            or reference_fov_mm is None
+        ):
+            return
+
+        widget = self.main_widget
+
+        read_fov_m = (
+            float(
+                widget
+                .PlanningFOVRead_Value
+                .value()
+            )
+            / 1000.0
+        )
+
+        phase_percent = float(
+            widget
+            .PlanningFOVPhase_Value
+            .value()
+        )
+
+        third_fov_m = (
+            float(
+                widget
+                .PlanningSlabThickness_Value
+                .value()
+            )
+            / 1000.0
+        )
+
+        phase_fov_m = (
+            read_fov_m
+            * phase_percent
+            / 100.0
+        )
+
+        logical_fov_m = np.array(
+            [
+                read_fov_m,
+                phase_fov_m,
+                third_fov_m,
+            ],
+            dtype=float,
+        )
+
+        encoding_matrix = (
+            orientation_encoding_matrix(
+                widget
+                .Orientation_ComboBox
+                .currentText(),
+                readout_direction=(
+                    widget
+                    .ReadoutDirection_ComboBox
+                    .currentText()
+                ),
+            )
+        )
+
+        # Inverse of:
+        #
+        # logical =
+        #     abs(E).T @ box_local
+        #
+        # E is currently an axis permutation matrix.
+        box_fov_m = (
+            np.abs(
+                encoding_matrix
+            )
+            @ logical_fov_m
+        )
+
+        reference_fov_m = np.asarray(
+            mm_to_m(
+                reference_fov_mm
+            ),
+            dtype=float,
+        )
+
+        if reference_fov_m.shape != (3,):
+            return
+
+        candidate_size_norm = (
+            box_fov_m
+            / reference_fov_m
+        )
+
+        if (
+            np.any(
+                candidate_size_norm
+                < 0.02
+            )
+            or np.any(
+                candidate_size_norm
+                > 1.0
+            )
+        ):
+            log.warning(
+                "Requested planned FOV is outside "
+                "the Localizer reference volume."
+            )
+
+            self.refresh_planning_ui()
+            return
+
+        center_norm = np.array(
+            [
+                float(
+                    fov_box[
+                        "center_x"
+                    ]
+                ),
+                float(
+                    fov_box[
+                        "center_y"
+                    ]
+                ),
+                float(
+                    fov_box[
+                        "center_z"
+                    ]
+                ),
+            ],
+            dtype=float,
+        )
+
+        minimum_center = (
+            0.5
+            * candidate_size_norm
+        )
+
+        maximum_center = (
+            1.0
+            - 0.5
+            * candidate_size_norm
+        )
+
+        if (
+            np.any(
+                center_norm
+                < minimum_center
+            )
+            or np.any(
+                center_norm
+                > maximum_center
+            )
+        ):
+            log.warning(
+                "Requested planned FOV would exceed "
+                "the current planning bounds."
+            )
+
+            self.refresh_planning_ui()
+            return
+
+        fov_box[
+            "size_x"
+        ] = float(
+            candidate_size_norm[0]
+        )
+
+        fov_box[
+            "size_y"
+        ] = float(
+            candidate_size_norm[1]
+        )
+
+        fov_box[
+            "size_z"
+        ] = float(
+            candidate_size_norm[2]
+        )
+
+        self.update_info()
+
+    def merge_ui_other_parameters(
+        self,
+        other_data,
+    ):
+        """
+        Merge geometry edited by the sequence UI into the
+        Other-data document that will be persisted.
+        """
+
+        scan_task = getattr(
+            self,
+            "_ui_scan_task",
+            None,
+        )
+
+        if scan_task is None:
+            return other_data
+
+        geometry = (
+            scan_task.other.get(
+                "geometry"
+            )
+        )
+
+        if not isinstance(
+            geometry,
+            dict,
+        ):
+            return other_data
+
+        merged = copy.deepcopy(
+            other_data
+        )
+
+        merged[
+            "geometry"
+        ] = copy.deepcopy(
+            geometry
+        )
+
+        return merged
 
     def update_info(self):
 
