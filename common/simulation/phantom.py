@@ -89,6 +89,79 @@ PHANTOM_MARKERS: Dict[str, PhantomMarker] = {
         semi_axes_m=_M([0.055, 0.072, 0.088]),
         intensity=1.0,
     ),
+
+    # -------------------------------------------------
+    # Orientation fiducials.
+    #
+    # These are real features of the fixed simulation
+    # phantom, not UI overlays.
+    #
+    # Each one is thin along the corresponding Localizer
+    # slice-select axis so that it appears in exactly one
+    # centered orthogonal Localizer.
+    #
+    # Their in-plane coordinates are negative on both
+    # displayed axes, placing the gray spot in the
+    # lower-left part of each Localizer view.
+    # -------------------------------------------------
+
+    "fiducial_axial": PhantomMarker(
+        name="fiducial_axial",
+        center_m=_M(
+            [
+                -0.034,  # X: left
+                -0.030,  # Y: lower
+                0.000,   # centered in Axial slice
+            ]
+        ),
+        semi_axes_m=_M(
+            [
+                0.012,
+                0.012,
+                0.004,
+            ]
+        ),
+        intensity=0.25,
+    ),
+
+    "fiducial_coronal": PhantomMarker(
+        name="fiducial_coronal",
+        center_m=_M(
+            [
+                -0.034,  # X: left
+                0.000,   # centered in Coronal slice
+                -0.030,  # Z: lower
+            ]
+        ),
+        semi_axes_m=_M(
+            [
+                0.012,
+                0.004,
+                0.012,
+            ]
+        ),
+        intensity=0.25,
+    ),
+
+    "fiducial_sagittal": PhantomMarker(
+        name="fiducial_sagittal",
+        center_m=_M(
+            [
+                0.000,   # centered in Sagittal slice
+                -0.030,  # Y: left
+                -0.030,  # Z: lower
+            ]
+        ),
+        semi_axes_m=_M(
+            [
+                0.004,
+                0.012,
+                0.012,
+            ]
+        ),
+        intensity=0.25,
+    ),
+
     "bright": PhantomMarker(
         name="bright",
         center_m=_M([0.030, 0.020, -0.020]),
@@ -124,6 +197,11 @@ PHANTOM_MARKERS: Dict[str, PhantomMarker] = {
 # overlap, giving well-defined, reproducible intensities.
 _MARKER_ORDER: Tuple[str, ...] = (
     "body",
+
+    "fiducial_axial",
+    "fiducial_coronal",
+    "fiducial_sagittal",
+
     "dark",
     "bright",
     "chiral_low",
