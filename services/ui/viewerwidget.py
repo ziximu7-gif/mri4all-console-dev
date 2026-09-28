@@ -32,7 +32,6 @@ from common.geometry import (
     project_box_edges_to_plane_scanner_m,
     cm_to_m,
     localizer_image_plane_geometry,
-    localizer_orientation_marker_xy,
 )
 
 log = logger.get_logger()
@@ -127,12 +126,6 @@ class ViewerWidget(QWidget):
 
         self.fov_basis_items = []
 
-        # Asymmetric orientation fiducial used to verify that the
-        # 2D and 3D Localizer orientations agree.
-        #
-        # This is NOT the image origin and NOT scanner isocenter.
-        self.planning_orientation_marker = None
-
         self.fov_roi = None
         self.shim_roi = None
         self.fov_label = None
@@ -163,8 +156,6 @@ class ViewerWidget(QWidget):
         #     self.clear_view()
 
     def clear_view(self):
-        self._clear_planning_orientation_marker()
-
         if self.widget:
             widget_to_delete = self.widget
             self.layout().removeWidget(self.widget)
@@ -2575,8 +2566,6 @@ class ViewerWidget(QWidget):
         )
 
     def clear_planning_context(self):
-        self._clear_planning_orientation_marker()
-
         self._clear_fov_geometry_overlay()
 
         self.planning_orientation = None
@@ -2589,103 +2578,6 @@ class ViewerWidget(QWidget):
 
         self.fov_roi = None
         self.shim_roi = None
-
-    def _clear_planning_orientation_marker(
-        self,
-    ):
-        if (
-            self.planning_orientation_marker
-            is None
-        ):
-            return
-
-        if isinstance(
-            self.widget,
-            pg.ImageView,
-        ):
-            try:
-                self.widget.getView().removeItem(
-                    self.planning_orientation_marker
-                )
-            except Exception:
-                pass
-
-        self.planning_orientation_marker = None
-
-    def _update_planning_orientation_marker(
-        self,
-    ):
-        """
-        Show an asymmetric orientation fiducial in the Localizer
-        image.
-
-        The marker is placed on the visible object boundary using
-        the shared localizer_orientation_marker_xy() helper, so
-        the 2D and 3D Localizer views use exactly the same rule.
-
-        It is NOT the image origin and NOT scanner isocenter.
-        """
-
-        self._clear_planning_orientation_marker()
-
-        if (
-            self.planning_orientation is None
-            or self.planning_image_plane is None
-            or self.planning_image_array is None
-        ):
-            return
-
-        if not isinstance(
-            self.widget,
-            pg.ImageView,
-        ):
-            return
-
-        marker_xy = (
-            localizer_orientation_marker_xy(
-                self.planning_image_array
-            )
-        )
-
-        if marker_xy is None:
-            return
-
-        marker = pg.ScatterPlotItem(
-            [
-                float(
-                    marker_xy[0]
-                )
-            ],
-            [
-                float(
-                    marker_xy[1]
-                )
-            ],
-            symbol="o",
-            size=8,
-            pen=pg.mkPen(
-                None
-            ),
-            brush=pg.mkBrush(
-                140,
-                140,
-                140,
-                255,
-            ),
-            pxMode=True,
-        )
-
-        marker.setZValue(
-            100
-        )
-
-        self.widget.getView().addItem(
-            marker
-        )
-
-        self.planning_orientation_marker = (
-            marker
-        )
 
     def load_dicoms(self, input_path, task: Optional[ScanTask] = None):
         if not input_path:
@@ -2889,12 +2781,6 @@ class ViewerWidget(QWidget):
         self.widget.ui.roiBtn.hide()
         self.widget.ui.menuBtn.hide()
         self.widget.autoRange()
-
-        if (
-            self.planning_orientation is not None
-            and self.planning_image_plane is not None
-        ):
-            self._update_planning_orientation_marker()
 
         if task:
             text = StaticTextItem(
