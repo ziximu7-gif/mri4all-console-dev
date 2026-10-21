@@ -97,7 +97,6 @@ class PlanningGLViewWidget(
         super().__init__(
             parent=parent
         )
-        self.show_planning_fov = True
         self._planning_drag_active = False
         self._planning_drag_last_pos = None
 
@@ -917,6 +916,8 @@ class Planning3DWidget(QWidget):
         # Physical size of the centered scanner-space
         # reference volume used by normalized Box3D.
         self.reference_fov_m = None
+
+        self.show_planning_fov = False
 
         # -------------------------------------------------
         # GL scene items

@@ -101,6 +101,7 @@ class ViewerWidget(QWidget):
 
         self.planning_state = None
         self.planning_mode = "none"
+        self.planning_editable = False
 
         # Orientation of THIS Localizer viewer
         # (Axial / Coronal / Sagittal).
@@ -316,6 +317,7 @@ class ViewerWidget(QWidget):
         self.planning_mode = mode
         self.planning_orientation = orientation
         self.planning_state = planning_state
+        self.planning_editable = False
 
     def _clear_fov_geometry_overlay(
         self,
@@ -1861,10 +1863,11 @@ class ViewerWidget(QWidget):
         self.shim_roi.sigRegionChangeFinished.connect(
             self._shim_roi_change_finished
         )
-        self._apply_box_to_roi(
-            self.fov_roi,
-            self.planning_state.fov_box,
-        )
+        if self.planning_mode == "gre":
+            self._apply_box_to_roi(
+                self.fov_roi,
+                self.planning_state.fov_box,
+            )
         self._apply_box_to_roi(
             self.shim_roi,
             self.planning_state.shim_box,

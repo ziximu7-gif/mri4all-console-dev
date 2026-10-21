@@ -735,6 +735,18 @@ class ExaminationWindow(QMainWindow):
         closing a patient (it is just moved to the background). Hence, all UI elements need to be
         reset to their initial state.
         """
+        self.planning_scan_path = None
+        self.planning_state = PlanningState()
+        self._gre_planning_state = None
+        self._active_gre_task = None
+        self.applyPlanningButton.setEnabled(False)
+        for viewer in (
+            self.viewer1,
+            self.viewer2,
+            self.viewer3,
+        ):
+            viewer.clear_planning_context()
+        self.planning3d.clear_planning_context()
         self.clear_viewers()
         patient_text = f'<span style="color: #FFF; font-size: 20px; font-weight: bold; ">{ui_runtime.patient_information.get_full_name()}</span><span style="color: #515669; font-size: 20px;">'
         patient_text += chr(0xA0) + chr(0xA0)
@@ -1123,12 +1135,6 @@ class ExaminationWindow(QMainWindow):
         ui_runtime.editor_sequence_instance.init_ui(
             sequence_ui_container, self.sequenceResolutionLabel
         )
-        if scan_task.sequence == "gre_3D":
-            self._show_gre_planning(scan_task)
-            ui_runtime.editor_sequence_instance.on_planning_geometry_changed = (
-                self._refresh_gre_planning_from_task
-            )
-            self.applyPlanningButton.setEnabled(False)
         scan_path = ui_runtime.get_scan_location(index)
         if not scan_path:
             log.error("Case has invalid state. Cannot read scan parameters")
@@ -1158,6 +1164,20 @@ class ExaminationWindow(QMainWindow):
         ui_runtime.editor_sequence_instance.write_parameters_to_ui(
             sequence_ui_container
         )
+
+        if scan_task.sequence == "gre_3D":
+            sequence = ui_runtime.editor_sequence_instance
+            sequence.on_planning_geometry_changed = (
+                self._refresh_gre_planning_from_task
+            )
+            self._show_gre_planning(scan_task)
+            self.applyPlanningButton.setEnabled(False)
+            for viewer in (
+                self.viewer1,
+                self.viewer2,
+                self.viewer3,
+            ):
+                viewer.planning_editable = not read_only
 
         # Configure UI for editing
         for i in range(self.scanParametersWidget.count()):
@@ -1744,9 +1764,15 @@ class ExaminationWindow(QMainWindow):
             self.planning3d,
         )
         if (
-            source_viewer in planning_viewers
-            and self._active_gre_task is not None
+            self._active_gre_task is not None
             and self._gre_planning_state is not None
+            and source_viewer in planning_viewers
+            and getattr(
+                source_viewer,
+                "planning_state",
+                None,
+            )
+            is self._gre_planning_state
         ):
             geometry = self._active_gre_task.other.get(
                 "geometry"
