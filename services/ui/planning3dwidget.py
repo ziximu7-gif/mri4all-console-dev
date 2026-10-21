@@ -97,7 +97,7 @@ class PlanningGLViewWidget(
         super().__init__(
             parent=parent
         )
-
+        self.show_planning_fov = True
         self._planning_drag_active = False
         self._planning_drag_last_pos = None
 
@@ -1554,7 +1554,8 @@ class Planning3DWidget(QWidget):
         Horizontal right-drag is positive along the selected
         scanner axis; left-drag is negative.
         """
-
+        if not self.show_planning_fov:
+            return
         if self.planning_state is None:
             return
 
@@ -1781,7 +1782,8 @@ class Planning3DWidget(QWidget):
         Handle IDs describe UI semantics only; PlanningState
         remains the single source of truth.
         """
-
+        if not self.show_planning_fov:
+            return
         handle_id = str(
             handle_id
         )
@@ -2808,7 +2810,8 @@ class Planning3DWidget(QWidget):
         Apply one toolbar FOV operation and notify all
         planning views through the shared PlanningState.
         """
-
+        if not self.show_planning_fov:
+            return
         if self.planning_state is None:
             return
 
@@ -2919,6 +2922,7 @@ class Planning3DWidget(QWidget):
         self,
         planning_state,
         reference_fov_m,
+        show_fov=True,
     ):
         """
         Attach the shared PlanningState and physical
@@ -2927,7 +2931,7 @@ class Planning3DWidget(QWidget):
         The PlanningState object is shared; this widget does
         not copy it.
         """
-
+        self.show_planning_fov = bool(show_fov)
         reference_fov_m = float(
             reference_fov_m
         )
@@ -3609,8 +3613,8 @@ class Planning3DWidget(QWidget):
         """
 
         if (
-            self.planning_state
-            is None
+            self.planning_state is None
+            or not self.show_planning_fov
         ):
             self.fov_wireframe_item.hide()
             self.fov_wireframe_ghost_item.hide()

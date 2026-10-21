@@ -24,6 +24,10 @@ from common.simulation import (
     Localizer2DSimulationContext,
 )
 
+from sequences.common.planning_capabilities import (
+    PlanningCapabilities,
+)
+
 log = logger.get_logger()
 
 # Number of integration samples through the finite Localizer slice
@@ -50,6 +54,15 @@ class SequenceSE_2D(PulseqSequence, registry_key=Path(__file__).stem):
     @classmethod
     def get_readable_name(self) -> str:
         return "Localizer"
+
+    @classmethod
+    def get_planning_capabilities(cls):
+        return PlanningCapabilities(
+            provides_reference=True,
+            uses_reference_images=False,
+            editable_fov=False,
+            geometry_kind="slice2d",
+        )
 
     def setup_ui(self, widget) -> bool:
         seq_path = os.path.dirname(os.path.abspath(__file__))

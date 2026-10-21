@@ -28,7 +28,12 @@ import common.helper as helper
 import common.config as config
 
 from sequences.common.planning import (
+    make_initial_gre_geometry,
     resolve_task_planning,
+)
+
+from sequences.common.planning_capabilities import (
+    PlanningCapabilities,
 )
 
 from common.geometry import (
@@ -69,6 +74,26 @@ class SequenceGRE_3D(PulseqSequence, registry_key=Path(__file__).stem):
     @classmethod
     def get_description(self) -> str:
         return "Volumetric 3D GRE acquisition with Cartesian sampling"
+
+    @classmethod
+    def get_planning_capabilities(cls):
+        return PlanningCapabilities(
+            provides_reference=False,
+            uses_reference_images=True,
+            editable_fov=True,
+            geometry_kind="volume3d",
+        )
+
+    @classmethod
+    def make_initial_planning_geometry(
+        cls,
+        parameters,
+        reference_task,
+    ):
+        return make_initial_gre_geometry(
+            parameters,
+            reference_task,
+        )
 
     def setup_ui(self, widget) -> bool:
         seq_path = os.path.dirname(os.path.abspath(__file__))
@@ -686,18 +711,15 @@ class SequenceGRE_3D(PulseqSequence, registry_key=Path(__file__).stem):
             ],
             dtype=float,
         )
-
         minimum_center = (
             0.5
             * candidate_size_norm
         )
-
         maximum_center = (
             1.0
             - 0.5
             * candidate_size_norm
         )
-
         if (
             np.any(
                 center_norm
@@ -715,26 +737,29 @@ class SequenceGRE_3D(PulseqSequence, registry_key=Path(__file__).stem):
 
             self.refresh_planning_ui()
             return
-
         fov_box[
             "size_x"
         ] = float(
             candidate_size_norm[0]
         )
-
         fov_box[
             "size_y"
         ] = float(
             candidate_size_norm[1]
         )
-
         fov_box[
             "size_z"
         ] = float(
             candidate_size_norm[2]
         )
-
         self.update_info()
+        callback = getattr(
+            self,
+            "on_planning_geometry_changed",
+            None,
+        )
+        if callable(callback):
+            callback()
 
     def _planned_position_ui_changed(
         self,
@@ -914,6 +939,14 @@ class SequenceGRE_3D(PulseqSequence, registry_key=Path(__file__).stem):
         )
 
         self.update_info()
+        callback = getattr(
+            self,
+            "on_planning_geometry_changed",
+            None,
+        )
+
+        if callable(callback):
+            callback()
 
     def merge_ui_other_parameters(
         self,

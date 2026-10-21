@@ -100,6 +100,7 @@ class ViewerWidget(QWidget):
         # -------------------------------------------------
 
         self.planning_state = None
+        self.planning_mode = "none"
 
         # Orientation of THIS Localizer viewer
         # (Axial / Coronal / Sagittal).
@@ -299,12 +300,20 @@ class ViewerWidget(QWidget):
         self,
         orientation,
         planning_state,
+        mode="gre",
     ):
         """
         Tell this viewer which localizer plane it represents
         and which shared PlanningState it should use.
         """
+        if mode not in ("localizer", "gre"):
+            raise ValueError(
+                f"Unsupported planning mode: {mode}"
+            )
 
+        self.planning_orientation = orientation
+        self.planning_state = planning_state
+        self.planning_mode = mode
         self.planning_orientation = orientation
         self.planning_state = planning_state
 
@@ -338,51 +347,41 @@ class ViewerWidget(QWidget):
         self.fov_projection_item = None
         self.fov_intersection_item = None
 
-    def _update_fov_geometry_overlay(
-        self,
-    ):
+    def _update_fov_geometry_overlay(self,):
         """
         Rebuild the canonical FOV display for this Localizer.
-
         Solid:
             true intersection between the current Localizer
             center plane and the shared 3D planning FOV.
-
         Dashed:
             orthographic projection of all twelve 3D FOV
             edges onto the Localizer center plane.
-
         The RectROI remains an interaction control only.
         It is not the canonical FOV display.
         """
-
+        
         self._clear_fov_geometry_overlay()
-
+        if self.planning_mode != "gre":
+            return
         if self.planning_state is None:
             return
-
         if self.planning_image_plane is None:
             return
-
         if self.planning_reference_fov_m is None:
             return
-
         if not isinstance(
             self.widget,
             pg.ImageView,
         ):
             return
-
         reference_fov_m = float(
             self.planning_reference_fov_m
         )
-
         if (
             not np.isfinite(reference_fov_m)
             or reference_fov_m <= 0.0
         ):
             return
-
         # Box3D is stored in normalized scanner X/Y/Z coordinates.
         # Convert it to physical scanner-space geometry.
         reference_fov_mm = np.full(
@@ -563,28 +562,23 @@ class ViewerWidget(QWidget):
 
     def _update_fov_basis_indicator(self):
         self._clear_fov_basis_indicator()
-
+        if self.planning_mode != "gre":
+            return
         if (
             self.planning_state is None
             or self.planning_orientation is None
         ):
             return
-
         image_size = self._planning_image_size()
-
         if image_size is None:
             return
-
         image_width, image_height = image_size
-
         box = self.planning_state.fov_box
-
         rotation = planning_euler_to_matrix(
             box.rotation_x,
             box.rotation_y,
             box.rotation_z,
         )
-
         if self.planning_orientation == "Axial":
             plane_projection = np.array(
                 [
@@ -593,7 +587,6 @@ class ViewerWidget(QWidget):
                 ],
                 dtype=float,
             )
-
         elif self.planning_orientation == "Coronal":
             plane_projection = np.array(
                 [
@@ -602,7 +595,6 @@ class ViewerWidget(QWidget):
                 ],
                 dtype=float,
             )
-
         elif self.planning_orientation == "Sagittal":
             plane_projection = np.array(
                 [
@@ -611,19 +603,15 @@ class ViewerWidget(QWidget):
                 ],
                 dtype=float,
             )
-
         else:
             return
-
         projected_axes = (
             plane_projection
             @ rotation
         )
-
         horizontal_axis, vertical_axis = (
             self._plane_axes()
         )
-
         center_x = (
             getattr(
                 box,
@@ -631,7 +619,6 @@ class ViewerWidget(QWidget):
             )
             * image_width
         )
-
         center_y = (
             getattr(
                 box,
@@ -639,7 +626,6 @@ class ViewerWidget(QWidget):
             )
             * image_height
         )
-
         indicator_length = (
             0.12
             * min(
@@ -647,54 +633,44 @@ class ViewerWidget(QWidget):
                 image_height,
             )
         )
-
         axis_specs = (
             ("X'", 0, "y"),
             ("Y'", 1, "c"),
             ("Z'", 2, "m"),
         )
-
         view = self.widget.getView()
-
         for (
             axis_name,
             axis_index,
             color,
         ) in axis_specs:
-
             direction = (
                 projected_axes[
                     :,
                     axis_index,
                 ]
             )
-
             direction_norm = float(
                 np.linalg.norm(direction)
             )
-
             # Axis almost perpendicular to
             # this localizer plane.
             if direction_norm < 0.10:
                 continue
-
             direction = (
                 direction
                 / direction_norm
             )
-
             end_x = (
                 center_x
                 + indicator_length
                 * direction[0]
             )
-
             end_y = (
                 center_y
                 + indicator_length
                 * direction[1]
             )
-
             line = pg.PlotDataItem(
                 [
                     center_x,
@@ -709,28 +685,23 @@ class ViewerWidget(QWidget):
                     width=3,
                 ),
             )
-
             label = pg.TextItem(
                 text=axis_name,
                 color=color,
                 anchor=(0.5, 0.5),
             )
-
             label.setPos(
                 end_x,
                 end_y,
             )
-
             view.addItem(line)
             view.addItem(label)
-
             self.fov_basis_items.extend(
                 [
                     line,
                     label,
                 ]
             )
-            
     def _projection_components(
         self,
         box,
@@ -1737,64 +1708,71 @@ class ViewerWidget(QWidget):
         # Avoid creating twice.
         if self.fov_roi is not None:
             return
-
         # -------------------------------------------------
         # FOV box
         # -------------------------------------------------
+        if self.planning_mode == "localizer":
+            image_size = self._planning_image_size()
+            if image_size is None:
+                return
+            image_width, image_height = image_size
+            # Full image area is the Localizer in-plane
+            # acquisition FOV. No editable GRE box here.
+            fov_rect = (
+                0.0,
+                0.0,
+                float(image_width),
+                float(image_height),
+            )
+            fov_angle = 0.0
+        else:
+            fov_rect = self._box_to_rect(
+                self.planning_state.fov_box
+            )
 
-        fov_rect = self._box_to_rect(
-            self.planning_state.fov_box
-        )
-
+            fov_angle = self._box_angle(
+                self.planning_state.fov_box
+            )
         if fov_rect is None:
             return
-
         (
             fov_x,
             fov_y,
             fov_width,
             fov_height,
         ) = fov_rect
+        is_gre = self.planning_mode == "gre"
         self.fov_roi = pg.RectROI(
-            [
-                fov_x,
-                fov_y,
-            ],
-            [
-                fov_width,
-                fov_height,
-            ],
-            angle=self._box_angle(
-                self.planning_state.fov_box
-            ),
+            [fov_x, fov_y],
+            [fov_width, fov_height],
+            angle=fov_angle,
             pen=pg.mkPen(
-                (255, 255, 0, 80),
-                width=1,
+                "y",
+                width=2,
             ),
-            movable=True,
-            rotatable=True,
-            resizable=True,
+            movable=is_gre,
+            rotatable=is_gre,
+            resizable=is_gre,
         )
-
         self.widget.getView().addItem(
             self.fov_roi
         )
         self.fov_roi.setZValue(
             40
         )
-        self.fov_roi.addRotateHandle(
-            [1.0, 0.0],
-            [0.5, 0.5],
-        )
-        self.fov_roi.addScaleHandle(
-            [1.0, 1.0],
-            [0.0, 0.0],
-        )
-
-        self.fov_roi.addScaleHandle(
-            [0.0, 0.0],
-            [1.0, 1.0],
-        )
+        if is_gre:
+            self.fov_roi.addRotateHandle(
+                [1.0, 0.0],
+                [0.5, 0.5],
+            )
+            self.fov_roi.addScaleHandle(
+                [1.0, 1.0],
+                [0.0, 0.0],
+            )
+            self.fov_roi.addScaleHandle(
+                [0.0, 0.0],
+                [1.0, 1.0],
+            )
         self.fov_label = pg.TextItem(
             text="FOV",
             color="y",
@@ -1804,22 +1782,18 @@ class ViewerWidget(QWidget):
         self.widget.getView().addItem(
             self.fov_label
         )
-
         # -------------------------------------------------
         # Shim box
         # -------------------------------------------------
-
         shim_rect = self._box_to_rect(
             self.planning_state.shim_box
         )
-
         (
             shim_x,
             shim_y,
             shim_width,
             shim_height,
         ) = shim_rect
-
         self.shim_roi = pg.RectROI(
             [
                 shim_x,
@@ -1840,7 +1814,6 @@ class ViewerWidget(QWidget):
             rotatable=True,
             resizable=True,
         )
-
         self.widget.getView().addItem(
             self.shim_roi
         )
@@ -1866,32 +1839,25 @@ class ViewerWidget(QWidget):
         self.widget.getView().addItem(
             self.shim_label
         )
-
         # -------------------------------------------------
         # Connect interaction signals
         # -------------------------------------------------
-
-        self.fov_roi.sigRegionChangeStarted.connect(
-            self._fov_roi_change_started
-        )
-
-        self.fov_roi.sigRegionChanged.connect(
-            self._fov_roi_changed
-        )
-
-        self.fov_roi.sigRegionChangeFinished.connect(
-            self._fov_roi_change_finished
-        )
-
-
+        if is_gre:
+            self.fov_roi.sigRegionChangeStarted.connect(
+                self._fov_roi_change_started
+            )
+            self.fov_roi.sigRegionChanged.connect(
+                self._fov_roi_changed
+            )
+            self.fov_roi.sigRegionChangeFinished.connect(
+                self._fov_roi_change_finished
+            )
         self.shim_roi.sigRegionChangeStarted.connect(
             self._shim_roi_change_started
         )
-
         self.shim_roi.sigRegionChanged.connect(
             self._shim_roi_changed
         )
-
         self.shim_roi.sigRegionChangeFinished.connect(
             self._shim_roi_change_finished
         )
@@ -1899,16 +1865,12 @@ class ViewerWidget(QWidget):
             self.fov_roi,
             self.planning_state.fov_box,
         )
-
         self._apply_box_to_roi(
             self.shim_roi,
             self.planning_state.shim_box,
         )
-
         self._update_planning_labels()
-
         self._update_fov_basis_indicator()
-
         self._update_fov_geometry_overlay()
 
     def _update_planning_labels(self):
@@ -1916,57 +1878,56 @@ class ViewerWidget(QWidget):
         Keep FOV / Shim labels attached to each ROI
         and display the current in-plane angle.
         """
-
         if (
             self.fov_roi is not None
             and
             self.fov_label is not None
         ):
-
             fov_pos = (
                 self.fov_roi.pos()
             )
-
             fov_angle = (
                 self.fov_roi.angle()
             )
-
             self.fov_label.setText(
                 f"FOV  {fov_angle:.1f} deg"
             )
-
             self.fov_label.setPos(
                 float(fov_pos.x()),
                 float(fov_pos.y()),
             )
-
         if (
             self.shim_roi is not None
             and
             self.shim_label is not None
         ):
-
             shim_pos = (
                 self.shim_roi.pos()
             )
-
             shim_angle = (
                 self.shim_roi.angle()
             )
-
             self.shim_label.setText(
                 f"Shim  {shim_angle:.1f} deg"
             )
-
             self.shim_label.setPos(
                 float(shim_pos.x()),
                 float(shim_pos.y()),
             )
-
+        if self.planning_mode == "localizer":
+            self.fov_label.setText(
+                "Localizer Acquisition FOV"
+            )
+        else:
+            self.fov_label.setText(
+                f"GRE FOV  {fov_angle:.1f} deg"
+            )
     def _fov_roi_change_started(
         self,
         *args,
     ):
+        if self.planning_mode != "gre":
+            return
         if (
             self.fov_roi is None
             or self.planning_state is None
@@ -1983,6 +1944,8 @@ class ViewerWidget(QWidget):
         self,
         *args,
     ):
+        if self.planning_mode != "gre":
+            return
         if self.updating_planning_rois:
             return
 
@@ -2010,6 +1973,8 @@ class ViewerWidget(QWidget):
         self,
         *args,
     ):
+        if self.planning_mode != "gre":
+            return
         if (
             self.fov_roi is None
             or self.planning_state is None
@@ -2105,12 +2070,11 @@ class ViewerWidget(QWidget):
         self.updating_planning_rois = True
 
         try:
-
-            self._apply_box_to_roi(
-                self.fov_roi,
-                self.planning_state.fov_box,
-            )
-
+            if self.planning_mode == "gre":
+                self._apply_box_to_roi(
+                    self.fov_roi,
+                    self.planning_state.fov_box,
+                )
             self._apply_box_to_roi(
                 self.shim_roi,
                 self.planning_state.shim_box,
@@ -2567,7 +2531,7 @@ class ViewerWidget(QWidget):
 
     def clear_planning_context(self):
         self._clear_fov_geometry_overlay()
-
+        self.planning_mode = "none"
         self.planning_orientation = None
         self.planning_state = None
 

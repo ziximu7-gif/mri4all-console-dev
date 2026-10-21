@@ -38,11 +38,12 @@ from services.ui.custommessagebox import CustomMessageBox  # type: ignore
 import services.ui.control as control
 
 from services.ui.errors import SequenceUIFailed, UIException
-from common.geometry import (
-    cm_to_mm,
-    cm_to_m,
-)
+from common.geometry import (cm_to_mm,cm_to_m,)
 import external.seq.adjustments_acq.config as cfg
+import copy
+from pathlib import Path
+
+from services.ui.spatialbox import Box3D
 
 log = logger.get_logger()
 
@@ -98,6 +99,8 @@ class ExaminationWindow(QMainWindow):
         self.planning_state = PlanningState()
         # Scan folder of the localizer currently used for planning.
         self.planning_scan_path = None
+        self._gre_planning_state = None
+        self._active_gre_task = None
         self.actionClose_Examination.triggered.connect(self.close_examination_clicked)
         self.actionShutdown.triggered.connect(self.shutdown_clicked)
         self.actionAbout.triggered.connect(about.show_about)
@@ -159,6 +162,11 @@ class ExaminationWindow(QMainWindow):
         self.copyFovButton.clicked.connect(
             self.copy_fov_clicked
         )
+        # Retired: GRE FOV is initialized when the GRE
+        # sequence is created, so the legacy copy action must
+        # not be able to overwrite an edited GRE FOV.
+        self.copyFovButton.setVisible(False)
+        self.copyFovButton.setEnabled(False)
 
         self.acceptScanEditButton.setText("")
         self.acceptScanEditButton.setToolTip("Accept changes")
@@ -515,6 +523,117 @@ class ExaminationWindow(QMainWindow):
                 ui_runtime.status_received_acqdata = False
                 log.warning("Received invalid acqdata message")
                 log.exception(e)
+    
+    def _find_localizer_for_gre(self, gre_task):
+        """
+        Return (folder_path, localizer_task).
+        If GRE already has a source_localizer_id,
+        restore that exact source.
+        Otherwise choose the latest completed
+        Localizer from the same examination.
+        """
+        geometry = gre_task.other.get("geometry", {})
+        source_id = geometry.get("source_localizer_id")
+        paths = []
+        if self.planning_scan_path:
+            paths.append(Path(self.planning_scan_path))
+        for index, entry in enumerate(
+            ui_runtime.scan_queue_list
+        ):
+            if entry.sequence == "localizer":
+                paths.append(
+                    Path(ui_runtime.get_scan_location(index))
+                )
+        complete_root = Path(mri4all_paths.DATA_COMPLETE)
+        if complete_root.is_dir():
+            paths.extend(
+                p for p in complete_root.iterdir()
+                if p.is_dir()
+            )
+        matches = []
+        visited = set()
+        for path in paths:
+            if str(path) in visited:
+                continue
+            visited.add(str(path))
+            if not (path / "scan.json").exists():
+                continue
+            source = task.read_task(str(path))
+            if source is None:
+                continue
+            if source.sequence != "localizer":
+                continue
+            if source.exam.id != gre_task.exam.id:
+                continue
+            if source_id is not None:
+                if source.id == source_id:
+                    return str(path), source
+            else:
+                if source.results:
+                    matches.append((str(path), source))
+        if source_id is not None:
+            return None
+        if not matches:
+            return None
+        return max(
+            matches,
+            key=lambda item: item[1].scan_number,
+        )
+
+    def _initialize_new_gre(self, scan_path, sequence_type=None):
+        gre_task = task.read_task(scan_path)
+
+        if gre_task is None:
+            return False
+
+        if sequence_type is None:
+            sequence_type = SequenceBase.get_sequence(
+                gre_task.sequence
+            )
+
+        result = self._find_localizer_for_gre(gre_task)
+        if result is None:
+            log.warning(
+                "No completed Localizer for this GRE"
+            )
+            return False
+
+        _, localizer_task = result
+
+        try:
+            geometry = (
+                sequence_type.make_initial_planning_geometry(
+                    gre_task.parameters,
+                    localizer_task,
+                )
+            )
+        except ValueError as exc:
+            log.error(str(exc))
+            return False
+
+        if not isinstance(geometry, dict):
+            log.warning(
+                "Sequence provided no initial planning "
+                "geometry"
+            )
+            return False
+
+        # Copy Shim geometry as a snapshot if available.
+        # Never share a mutable dictionary with Localizer.
+        planning = localizer_task.other.get(
+            "planning", {}
+        )
+
+        if isinstance(planning, dict):
+            shim_box = planning.get("shim_box")
+            if isinstance(shim_box, dict):
+                geometry["shim_box"] = copy.deepcopy(
+                    shim_box
+                )
+
+        gre_task.other["geometry"] = geometry
+
+        return task.write_task(scan_path, gre_task)
 
     def update_monitor_status(self):
         self.monitorTimer.stop()
@@ -658,12 +777,35 @@ class ExaminationWindow(QMainWindow):
                 self.add_sequence_menu.addAction(add_sequence_action)
 
     def add_sequence(self):
-        # Delegate creation of ScanQueueEntry to UI runtime
-        sequence_class = self.sender().property("sequence_class")
-        if not ui_runtime.create_new_scan(sequence_class):
+        sequence_class = self.sender().property(
+            "sequence_class"
+        )
+        if not ui_runtime.create_new_scan(
+            sequence_class
+        ):
             log.error("Failed to create new scan")
-            self.set_status_message("Failed to insert new scan. Check log file.")
-
+            return
+        sequence_type = SequenceBase.get_sequence(
+            sequence_class
+        )
+        capabilities = (
+            sequence_type.get_planning_capabilities()
+        )
+        if capabilities.uses_reference_images:
+            new_index = (
+                len(ui_runtime.scan_queue_list) - 1
+            )
+            scan_path = ui_runtime.get_scan_location(
+                new_index
+            )
+            if not self._initialize_new_gre(
+                scan_path,
+                sequence_type,
+            ):
+                log.warning(
+                    "Scan created without Localizer planning; "
+                    "legacy FOV remains available"
+                )
         self.sync_queue_widget(False)
         self.scroll_queue_end()
 
@@ -981,6 +1123,12 @@ class ExaminationWindow(QMainWindow):
         ui_runtime.editor_sequence_instance.init_ui(
             sequence_ui_container, self.sequenceResolutionLabel
         )
+        if scan_task.sequence == "gre_3D":
+            self._show_gre_planning(scan_task)
+            ui_runtime.editor_sequence_instance.on_planning_geometry_changed = (
+                self._refresh_gre_planning_from_task
+            )
+            self.applyPlanningButton.setEnabled(False)
         scan_path = ui_runtime.get_scan_location(index)
         if not scan_path:
             log.error("Case has invalid state. Cannot read scan parameters")
@@ -1123,6 +1271,16 @@ class ExaminationWindow(QMainWindow):
         ui_runtime.editor_queue_index = -1
         ui_runtime.editor_scantask = ScanTask()
         self.sync_queue_widget(False)
+
+        if self._active_gre_task is not None:
+            self._active_gre_task = None
+            self._gre_planning_state = None
+            # Return to Localizer acquisition display.
+            if self.planning_scan_path:
+                folder = Path(
+                    self.planning_scan_path
+                ).name
+                self.autoload_results_in_viewer(folder)
 
     def clear_seq_tab_and_return_empty(self):
         old_widget_to_delete = self.scanParametersWidget.widget(0)
@@ -1394,7 +1552,7 @@ class ExaminationWindow(QMainWindow):
         if not isinstance(planning, dict):
             return
 
-        for box_name in ("fov_box", "shim_box"):
+        for box_name in ("shim_box",):
             box_data = planning.get(box_name)
 
             if not isinstance(box_data, dict):
@@ -1443,9 +1601,20 @@ class ExaminationWindow(QMainWindow):
             )
             return
 
-        scan_task.other["planning"] = (
-            self.planning_state.as_dict()
+        planning = scan_task.other.get(
+            "planning", {}
         )
+
+        if not isinstance(planning, dict):
+            planning = {}
+
+        # New Localizer planning only updates Shim.
+        # Preserve any historical metadata for compatibility.
+        planning["shim_box"] = (
+            self.planning_state.shim_box.as_dict()
+        )
+
+        scan_task.other["planning"] = planning
 
         if not task.write_task(
             self.planning_scan_path,
@@ -1496,6 +1665,7 @@ class ExaminationWindow(QMainWindow):
             planning3d.set_planning_context(
                 self.planning_state,
                 fov_m,
+                show_fov=False,
             )
 
         except (
@@ -1566,11 +1736,44 @@ class ExaminationWindow(QMainWindow):
         Refresh the OTHER 2D projections and the shared
         read-only 3D planning view.
         """
-
-        source_viewer = (
-            self.sender()
+        source_viewer = (self.sender())
+        planning_viewers = (
+            self.viewer1,
+            self.viewer2,
+            self.viewer3,
+            self.planning3d,
         )
+        if (
+            source_viewer in planning_viewers
+            and self._active_gre_task is not None
+            and self._gre_planning_state is not None
+        ):
+            geometry = self._active_gre_task.other.get(
+                "geometry"
+            )
 
+            if isinstance(geometry, dict):
+                geometry["fov_box"] = (
+                    self._gre_planning_state
+                    .fov_box
+                    .as_dict()
+                )
+
+                geometry["shim_box"] = (
+                    self._gre_planning_state
+                    .shim_box
+                    .as_dict()
+                )
+
+                sequence = (
+                    ui_runtime.editor_sequence_instance
+                )
+
+                if hasattr(
+                    sequence,
+                    "refresh_planning_ui",
+                ):
+                    sequence.refresh_planning_ui()
         for viewer in (
             self.viewer1,
             self.viewer2,
@@ -2167,6 +2370,7 @@ class ExaminationWindow(QMainWindow):
                 target_widget.set_planning_context(
                     orientation,
                     self.planning_state,
+                    mode="localizer",
                 )
 
             else:
@@ -2254,6 +2458,7 @@ class ExaminationWindow(QMainWindow):
                     self.viewer1.set_planning_context(
                         "Axial",
                         self.planning_state,
+                        mode="localizer",
                     )
 
                 else:
@@ -2293,6 +2498,7 @@ class ExaminationWindow(QMainWindow):
                     self.viewer2.set_planning_context(
                         "Coronal",
                         self.planning_state,
+                        mode="localizer",
                     )
 
                 else:
@@ -2332,6 +2538,7 @@ class ExaminationWindow(QMainWindow):
                     self.viewer3.set_planning_context(
                         "Sagittal",
                         self.planning_state,
+                        mode="localizer",
                     )
 
                 else:
@@ -2464,3 +2671,137 @@ class ExaminationWindow(QMainWindow):
         writing_json_parameter(config_data=configuration_data)
         cfg.update()
         pass
+    
+    def _show_gre_planning(self, gre_task):
+        geometry = gre_task.other.get("geometry")
+
+        if not isinstance(geometry, dict):
+            return False
+
+        result = self._find_localizer_for_gre(gre_task)
+        if result is None:
+            log.warning("GRE Localizer source unavailable")
+            return False
+
+        localizer_path, localizer_task = result
+
+        try:
+            gre_state = PlanningState()
+
+            # Independent copy owned by the current GRE UI.
+            gre_state.fov_box = Box3D(
+                **copy.deepcopy(geometry["fov_box"])
+            )
+
+            if isinstance(
+                geometry.get("shim_box"), dict
+            ):
+                gre_state.shim_box = Box3D(
+                    **copy.deepcopy(
+                        geometry["shim_box"]
+                    )
+                )
+        except (KeyError, TypeError, ValueError) as exc:
+            log.warning(
+                f"Invalid GRE planning state: {exc}"
+            )
+            return False
+
+        views = [
+            (1, "Axial", self.viewer1),
+            (2, "Coronal", self.viewer2),
+            (3, "Sagittal", self.viewer3),
+        ]
+
+        # Check all images before replacing any viewer.
+        images = []
+        for index, orientation, viewer in views:
+            item = next(
+                (
+                    r for r in localizer_task.results
+                    if r.type == "dicom"
+                    and r.autoload_viewer == index
+                ),
+                None,
+            )
+
+            if item is None:
+                log.warning(
+                    f"Missing Localizer {orientation} image"
+                )
+                return False
+
+            images.append((
+                orientation,
+                viewer,
+                str(Path(localizer_path) / item.file_path),
+            ))
+
+        self._gre_planning_state = gre_state
+        self._active_gre_task = gre_task
+
+        for orientation, viewer, image_path in images:
+            viewer.clear_reconstruction_overlay_context()
+
+            viewer.set_planning_context(
+                orientation,
+                gre_state,
+                mode="gre",
+            )
+
+            # Pixel data and physical plane geometry
+            # still belong to Localizer.
+            viewer.view_data(
+                image_path,
+                "dicom",
+                localizer_task,
+            )
+
+        localizer_fov_m = float(
+            cm_to_m(localizer_task.parameters["FOV"])
+        )
+
+        self.planning3d.set_planning_context(
+            gre_state,
+            localizer_fov_m,
+            show_fov=True,
+        )
+
+        self._refresh_planning3d_localizer_images()
+        self.set3Viewers()
+
+        return True
+    
+    def _refresh_gre_planning_from_task(self):
+        """
+        GRE parameter UI -> GRE planning overlays.
+        """
+        if self._active_gre_task is None:
+            return
+
+        if self._gre_planning_state is None:
+            return
+
+        geometry = self._active_gre_task.other.get(
+            "geometry", {}
+        )
+
+        box_data = geometry.get("fov_box")
+        if not isinstance(box_data, dict):
+            return
+
+        box = self._gre_planning_state.fov_box
+
+        for key, value in box_data.items():
+            if hasattr(box, key):
+                setattr(box, key, float(value))
+
+        for viewer in (
+            self.viewer1,
+            self.viewer2,
+            self.viewer3,
+        ):
+            viewer.refresh_planning_rois()
+
+        self.planning3d.refresh_planning_geometry()
+

@@ -4,6 +4,10 @@ from typing import Dict, TypeVar, Generic
 import os
 import common.logger as logger
 
+from sequences.common.planning_capabilities import (
+    PlanningCapabilities,
+)
+
 log = logger.get_logger()
 
 SequenceVar = TypeVar("SequenceVar")
@@ -136,6 +140,32 @@ class SequenceBase(Generic[SequenceVar]):
         Returns the list of problems that were detected by the sequence. These are shown in the UI.
         """
         return self.problem_list
+
+    @classmethod
+    def get_planning_capabilities(cls):
+        """
+        Returns what this sequence can do regarding planning.
+
+        Extension interface. Sequences that do not override this
+        report no planning support and keep their acquisition
+        behavior unchanged.
+        """
+        return PlanningCapabilities()
+
+    @classmethod
+    def make_initial_planning_geometry(
+        cls,
+        parameters,
+        reference_task,
+    ):
+        """
+        Build the initial acquisition geometry for a new scan of
+        this sequence, based on a reference (e.g. Localizer) task.
+
+        Extension interface. Returns None when the sequence does not
+        support planning.
+        """
+        return None
 
     def calculate_sequence(self, scan_task) -> bool:
         """
