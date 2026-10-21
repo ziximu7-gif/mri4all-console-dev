@@ -346,6 +346,7 @@ def planning_matrix_to_euler(
 def planning_box_to_scan_geometry(
     fov_box: Mapping[str, float],
     reference_fov_mm: Sequence[float],
+    allow_outside_reference: bool = False,
 ) -> ScanGeometry:
     """
     Convert normalized planning geometry into scanner-space
@@ -390,19 +391,30 @@ def planning_box_to_scan_geometry(
         dtype=float,
     )
 
-    if np.any(center_norm < 0) or np.any(
-        center_norm > 1
+    if (
+        not np.all(np.isfinite(center_norm))
+        or not np.all(np.isfinite(size_norm))
     ):
         raise ValueError(
-            "Planning center must be normalized to 0..1"
+            "Planning coordinates must be finite"
         )
 
-    if np.any(size_norm <= 0) or np.any(
-        size_norm > 1
-    ):
-        raise ValueError(
-            "Planning size must be normalized to 0..1"
-        )
+    if np.any(size_norm <= 0):
+        raise ValueError("Planning size must be positive")
+
+    if not allow_outside_reference:
+        if (
+            np.any(center_norm < 0)
+            or np.any(center_norm > 1)
+        ):
+            raise ValueError(
+                "Planning center must be normalized to 0..1"
+            )
+
+        if np.any(size_norm > 1):
+            raise ValueError(
+                "Planning size must be normalized to 0..1"
+            )
 
     center_scanner_m = (
         center_norm - 0.5

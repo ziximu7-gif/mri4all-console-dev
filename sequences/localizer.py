@@ -27,6 +27,9 @@ from common.simulation import (
 from sequences.common.planning_capabilities import (
     PlanningCapabilities,
 )
+from sequences.common.planning import (
+    localizer_plan_matches_legacy_acquisition,
+)
 
 log = logger.get_logger()
 
@@ -172,6 +175,17 @@ class SequenceSE_2D(PulseqSequence, registry_key=Path(__file__).stem):
         return self.is_valid()
 
     def calculate_sequence(self, scan_task) -> bool:
+        if not localizer_plan_matches_legacy_acquisition(
+            scan_task
+        ):
+            log.error(
+                "The next Localizer prescription requires "
+                "oblique/translated slice acquisition, "
+                "which is not yet supported by the "
+                "current Localizer sequence generator."
+            )
+            return False
+
         self.seq_file_path = self.get_working_folder() + "/seq/acq0.seq"
         log.info("Calculating sequence " + self.get_name())
         scan_task.processing.recon_mode = "localizer2d"

@@ -463,6 +463,7 @@ class Planning3DWidget(QWidget):
     # PlanningState, so every other planning view can
     # refresh from the SAME object.
     planning_changed = pyqtSignal()
+    region_selected = pyqtSignal(str)
 
     HOME_CAMERA_DISTANCE_M = 0.45
     HOME_CAMERA_ELEVATION_DEG = 20.0
@@ -782,6 +783,18 @@ class Planning3DWidget(QWidget):
             1
         )
 
+        self.region_combo = QComboBox()
+        self.region_combo.setToolTip(
+            "Select the future Localizer FOV"
+        )
+        self.region_combo.hide()
+        self.region_combo.currentTextChanged.connect(
+            self._region_combo_changed
+        )
+        planning_layout.addWidget(
+            self.region_combo
+        )
+
         self.fov_action_combo = (
             QComboBox()
         )
@@ -918,6 +931,10 @@ class Planning3DWidget(QWidget):
         self.reference_fov_m = None
 
         self.show_planning_fov = False
+
+        self.planning_scene = None
+        self.other_region_items = {}
+        self.planning_editable = False
 
         # -------------------------------------------------
         # GL scene items
@@ -1555,6 +1572,8 @@ class Planning3DWidget(QWidget):
         Horizontal right-drag is positive along the selected
         scanner axis; left-drag is negative.
         """
+        if not self.planning_editable:
+            return
         if not self.show_planning_fov:
             return
         if self.planning_state is None:
@@ -1783,6 +1802,8 @@ class Planning3DWidget(QWidget):
         Handle IDs describe UI semantics only; PlanningState
         remains the single source of truth.
         """
+        if not self.planning_editable:
+            return
         if not self.show_planning_fov:
             return
         handle_id = str(
@@ -1930,6 +1951,9 @@ class Planning3DWidget(QWidget):
         box-local outward normal as seen by the current camera.
         """
 
+        if not self.planning_editable:
+            return
+
         if (
             self.planning_state is None
             or self.reference_fov_m is None
@@ -1963,17 +1987,7 @@ class Planning3DWidget(QWidget):
             dtype=float,
         )
 
-        scan_geometry = (
-            planning_box_to_scan_geometry(
-                fov_box=(
-                    box.as_dict()
-                ),
-                reference_fov_mm=(
-                    reference_fov_m
-                    * 1000.0
-                ),
-            )
-        )
+        scan_geometry = self._geometry_for_box(box)
 
         rotation = np.asarray(
             scan_geometry.rotation_local_to_scanner,
@@ -2292,6 +2306,9 @@ class Planning3DWidget(QWidget):
         that axis.
         """
 
+        if not self.planning_editable:
+            return
+
         if (
             self.planning_state is None
             or self.reference_fov_m is None
@@ -2320,17 +2337,7 @@ class Planning3DWidget(QWidget):
             dtype=float,
         )
 
-        scan_geometry = (
-            planning_box_to_scan_geometry(
-                fov_box=(
-                    box.as_dict()
-                ),
-                reference_fov_mm=(
-                    reference_fov_m
-                    * 1000.0
-                ),
-            )
-        )
+        scan_geometry = self._geometry_for_box(box)
 
         center = np.asarray(
             scan_geometry.center_scanner_m,
@@ -2491,6 +2498,9 @@ class Planning3DWidget(QWidget):
             FOV center stays fixed.
         """
 
+        if not self.planning_editable:
+            return
+
         if (
             self.planning_state is None
             or self.reference_fov_m is None
@@ -2519,17 +2529,7 @@ class Planning3DWidget(QWidget):
             dtype=float,
         )
 
-        scan_geometry = (
-            planning_box_to_scan_geometry(
-                fov_box=(
-                    box.as_dict()
-                ),
-                reference_fov_mm=(
-                    reference_fov_m
-                    * 1000.0
-                ),
-            )
-        )
+        scan_geometry = self._geometry_for_box(box)
 
         corners = (
             scan_geometry_box_corners_scanner_m(
@@ -2811,6 +2811,8 @@ class Planning3DWidget(QWidget):
         Apply one toolbar FOV operation and notify all
         planning views through the shared PlanningState.
         """
+        if not self.planning_editable:
+            return
         if not self.show_planning_fov:
             return
         if self.planning_state is None:
@@ -2919,6 +2921,149 @@ class Planning3DWidget(QWidget):
     # Planning context
     # =====================================================
 
+    def _clear_other_region_items(self):
+        for item in self.other_region_items.values():
+            try:
+                self.view.removeItem(item)
+            except (RuntimeError, ValueError):
+                pass
+
+        self.other_region_items = {}
+
+
+    def _geometry_for_box(self, box):
+        if self.reference_fov_m is None:
+            raise ValueError("No planning reference FOV")
+
+        return planning_box_to_scan_geometry(
+            fov_box=box.as_dict(),
+            reference_fov_mm=[
+                float(self.reference_fov_m) * 1000.0
+            ] * 3,
+            allow_outside_reference=(
+                box.allow_outside_reference
+            ),
+        )
+
+
+    def set_multi_region_scene(
+        self,
+        scene,
+        editable=True,
+    ):
+        # Reuse all existing single-Box handles.
+        self.set_planning_context(
+            scene.active_region.state,
+            scene.reference_fov_m,
+            show_fov=True,
+        )
+
+        self.planning_scene = scene
+        self.planning_editable = bool(editable)
+
+        self.region_combo.blockSignals(True)
+        self.region_combo.clear()
+        self.region_combo.addItems(
+            list(scene.regions.keys())
+        )
+        self.region_combo.setCurrentText(
+            scene.active_id
+        )
+        self.region_combo.blockSignals(False)
+        self.region_combo.show()
+
+        self.refresh_other_region_wireframes()
+
+
+    def select_scene_region(self, region_id):
+        scene = self.planning_scene
+
+        if scene is None:
+            return
+
+        scene.select(region_id)
+
+        # Swap which Box the existing 3D handles edit.
+        self.planning_state = (
+            scene.active_region.state
+        )
+
+        self.region_combo.blockSignals(True)
+        self.region_combo.setCurrentText(
+            region_id
+        )
+        self.region_combo.blockSignals(False)
+
+        self.refresh_planning_geometry()
+        self.refresh_other_region_wireframes()
+
+
+    def _region_combo_changed(self, region_id):
+        if (
+            self.planning_scene is None
+            or region_id not in self.planning_scene.regions
+        ):
+            return
+
+        self.select_scene_region(region_id)
+        self.region_selected.emit(region_id)
+
+
+    def refresh_other_region_wireframes(self):
+        scene = self.planning_scene
+
+        if scene is None:
+            self._clear_other_region_items()
+            return
+
+        for region_id, region in scene.regions.items():
+            if region_id == scene.active_id:
+                item = self.other_region_items.get(
+                    region_id
+                )
+                if item is not None:
+                    item.hide()
+                continue
+
+            geometry = self._geometry_for_box(
+                region.state.fov_box
+            )
+            edges = scan_geometry_box_edges_scanner_m(
+                geometry
+            )
+
+            points = edges.reshape(-1, 3)
+
+            item = self.other_region_items.get(
+                region_id
+            )
+
+            if item is None:
+                item = gl.GLLinePlotItem(
+                    pos=points,
+                    color=(0.4, 0.8, 1.0, 0.75),
+                    width=2,
+                    antialias=True,
+                    mode="lines",
+                    glOptions="translucent",
+                )
+                item.setGLOptions(
+                    PLANNING_OVERLAY_GL_OPTIONS
+                )
+                self.view.addItem(item)
+                self.other_region_items[
+                    region_id
+                ] = item
+
+            item.setData(
+                pos=points,
+                color=(0.4, 0.8, 1.0, 0.75),
+                width=2,
+                antialias=True,
+                mode="lines",
+            )
+            item.show()
+
     def set_planning_context(
         self,
         planning_state,
@@ -2932,6 +3077,11 @@ class Planning3DWidget(QWidget):
         The PlanningState object is shared; this widget does
         not copy it.
         """
+        self._clear_other_region_items()
+        self.planning_scene = None
+        self.region_combo.hide()
+        self.planning_editable = False
+
         self.show_planning_fov = bool(show_fov)
         reference_fov_m = float(
             reference_fov_m
@@ -2969,6 +3119,11 @@ class Planning3DWidget(QWidget):
     def clear_planning_context(
         self,
     ):
+        self._clear_other_region_items()
+        self.planning_scene = None
+        self.region_combo.hide()
+        self.planning_editable = False
+
         self.planning_state = None
         self.reference_fov_m = None
 
@@ -3688,17 +3843,8 @@ class Planning3DWidget(QWidget):
             dtype=float,
         )
 
-        scan_geometry = (
-            planning_box_to_scan_geometry(
-                fov_box=(
-                    self.planning_state
-                    .fov_box
-                    .as_dict()
-                ),
-                reference_fov_mm=(
-                    reference_fov_mm
-                ),
-            )
+        scan_geometry = self._geometry_for_box(
+            self.planning_state.fov_box
         )
 
         edges = (

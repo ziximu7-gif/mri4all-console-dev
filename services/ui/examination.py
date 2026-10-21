@@ -44,6 +44,9 @@ import copy
 from pathlib import Path
 
 from services.ui.spatialbox import Box3D
+from sequences.common.planning import (
+    make_next_localizer_scene,
+)
 
 log = logger.get_logger()
 
@@ -101,6 +104,7 @@ class ExaminationWindow(QMainWindow):
         self.planning_scan_path = None
         self._gre_planning_state = None
         self._active_gre_task = None
+        self._next_localizer_scene = None
         self.actionClose_Examination.triggered.connect(self.close_examination_clicked)
         self.actionShutdown.triggered.connect(self.shutdown_clicked)
         self.actionAbout.triggered.connect(about.show_about)
@@ -364,6 +368,19 @@ class ExaminationWindow(QMainWindow):
             self.refresh_planning_boxes
         )
 
+        for viewer in (
+            self.viewer1,
+            self.viewer2,
+            self.viewer3,
+        ):
+            viewer.region_selected.connect(
+                self._select_localizer_region
+            )
+
+        self.planning3d.region_selected.connect(
+            self._select_localizer_region
+        )
+
         self.sequenceResolutionLabel.setStyleSheet(
             "color: #515669; font-size: 18px; font-weight: normal;"
         )
@@ -532,8 +549,18 @@ class ExaminationWindow(QMainWindow):
         Otherwise choose the latest completed
         Localizer from the same examination.
         """
-        geometry = gre_task.other.get("geometry", {})
-        source_id = geometry.get("source_localizer_id")
+        geometry = gre_task.other.get("geometry")
+        if not isinstance(geometry, dict):
+            geometry = {}
+        next_localizer = gre_task.other.get(
+            "next_localizer"
+        )
+        if not isinstance(next_localizer, dict):
+            next_localizer = {}
+        source_id = (
+            geometry.get("source_localizer_id")
+            or next_localizer.get("source_localizer_id")
+        )
         paths = []
         if self.planning_scan_path:
             paths.append(Path(self.planning_scan_path))
@@ -739,6 +766,7 @@ class ExaminationWindow(QMainWindow):
         self.planning_state = PlanningState()
         self._gre_planning_state = None
         self._active_gre_task = None
+        self._next_localizer_scene = None
         self.applyPlanningButton.setEnabled(False)
         for viewer in (
             self.viewer1,
@@ -1165,12 +1193,24 @@ class ExaminationWindow(QMainWindow):
             sequence_ui_container
         )
 
+        if (
+            scan_task.sequence == "localizer"
+            and not read_only
+        ):
+            self._show_next_localizer_planning(
+                scan_task,
+                editable=True,
+            )
+
         if scan_task.sequence == "gre_3D":
             sequence = ui_runtime.editor_sequence_instance
             sequence.on_planning_geometry_changed = (
                 self._refresh_gre_planning_from_task
             )
-            self._show_gre_planning(scan_task)
+            self._show_gre_planning(
+                scan_task,
+                editable=not read_only,
+            )
             self.applyPlanningButton.setEnabled(False)
             for viewer in (
                 self.viewer1,
@@ -1219,6 +1259,15 @@ class ExaminationWindow(QMainWindow):
                     merge_ui_other_parameters(
                         other_data
                     )
+                )
+
+            if (
+                ui_runtime.editor_scantask.sequence
+                == "localizer"
+                and self._next_localizer_scene is not None
+            ):
+                other_data["next_localizer"] = (
+                    self._next_localizer_scene.as_dict()
                 )
 
             ui_runtime.editor_scantask.other = (
@@ -1296,6 +1345,14 @@ class ExaminationWindow(QMainWindow):
             self._active_gre_task = None
             self._gre_planning_state = None
             # Return to Localizer acquisition display.
+            if self.planning_scan_path:
+                folder = Path(
+                    self.planning_scan_path
+                ).name
+                self.autoload_results_in_viewer(folder)
+
+        if self._next_localizer_scene is not None:
+            self._next_localizer_scene = None
             if self.planning_scan_path:
                 folder = Path(
                     self.planning_scan_path
@@ -1749,6 +1806,28 @@ class ExaminationWindow(QMainWindow):
                 )
             )
 
+    def _select_localizer_region(self, region_id):
+        scene = self._next_localizer_scene
+
+        if scene is None:
+            return
+
+        if region_id not in scene.regions:
+            return
+
+        scene.select(region_id)
+
+        self.planning3d.select_scene_region(
+            region_id
+        )
+
+        for viewer in (
+            self.viewer1,
+            self.viewer2,
+            self.viewer3,
+        ):
+            viewer.refresh_active_region_overlay()
+
     def refresh_planning_boxes(self):
         """
         One viewer changed the shared Box3D.
@@ -1821,6 +1900,15 @@ class ExaminationWindow(QMainWindow):
             and planning3d is not source_viewer
         ):
             planning3d.refresh_planning_geometry()
+
+        if self._next_localizer_scene is not None:
+            self.planning3d.refresh_other_region_wireframes()
+            for viewer in (
+                self.viewer1,
+                self.viewer2,
+                self.viewer3,
+            ):
+                viewer.refresh_active_region_overlay()
 
         log.debug(
             "Planning state: "
@@ -2698,7 +2786,115 @@ class ExaminationWindow(QMainWindow):
         cfg.update()
         pass
     
-    def _show_gre_planning(self, gre_task):
+    def _show_next_localizer_planning(
+        self,
+        target_task,
+        editable=True,
+    ):
+        result = self._find_localizer_for_gre(
+            target_task
+        )
+
+        if result is None:
+            log.warning(
+                "No completed reference Localizer available"
+            )
+            return False
+
+        source_path, source_task = result
+
+        try:
+            scene = make_next_localizer_scene(
+                target_task=target_task,
+                source_task=source_task,
+                shared_shim_box=(
+                    self.planning_state.shim_box
+                ),
+            )
+        except (ValueError, TypeError, KeyError) as exc:
+            log.error(
+                f"Unable to initialize Localizer scene: {exc}"
+            )
+            return False
+
+        views = (
+            (1, "Axial", self.viewer1),
+            (2, "Coronal", self.viewer2),
+            (3, "Sagittal", self.viewer3),
+        )
+
+        image_specs = []
+
+        # Resolve all source images before changing the UI.
+        for index, orientation, viewer in views:
+            result_item = next(
+                (
+                    item
+                    for item in source_task.results
+                    if (
+                        item.type == "dicom"
+                        and item.autoload_viewer == index
+                    )
+                ),
+                None,
+            )
+
+            if result_item is None:
+                log.warning(
+                    f"Missing reference {orientation} image"
+                )
+                return False
+            image_path = (
+                Path(source_path)
+                / result_item.file_path
+            )
+            image_specs.append(
+                (orientation, viewer, image_path)
+            )
+        self._next_localizer_scene = scene
+        self.planning_scan_path = source_path
+
+        for orientation, viewer, image_path in image_specs:
+            viewer.clear_reconstruction_overlay_context()
+
+            viewer.set_next_localizer_scene(
+                scene,
+                orientation,
+                editable=editable,
+            )
+
+            # Image pixels and plane geometry belong to
+            # the already acquired reference Localizer.
+            viewer.view_data(
+                str(image_path),
+                "dicom",
+                source_task,
+            )
+
+        self.planning3d.set_multi_region_scene(
+            scene,
+            editable=editable,
+        )
+
+        self._refresh_planning3d_localizer_images()
+
+        self.applyPlanningButton.setEnabled(False)
+        self.set3Viewers()
+
+        for viewer in (
+            self.viewer1,
+            self.viewer2,
+            self.viewer3,
+        ):
+            viewer.refresh_active_region_overlay()
+
+        return True
+
+    def _show_gre_planning(
+        self,
+        gre_task,
+        editable=True,
+    ):
         geometry = gre_task.other.get("geometry")
 
         if not isinstance(geometry, dict):
@@ -2773,6 +2969,7 @@ class ExaminationWindow(QMainWindow):
                 orientation,
                 gre_state,
                 mode="gre",
+                editable=editable,
             )
 
             # Pixel data and physical plane geometry
@@ -2791,6 +2988,10 @@ class ExaminationWindow(QMainWindow):
             gre_state,
             localizer_fov_m,
             show_fov=True,
+        )
+
+        self.planning3d.planning_editable = bool(
+            editable
         )
 
         self._refresh_planning3d_localizer_images()

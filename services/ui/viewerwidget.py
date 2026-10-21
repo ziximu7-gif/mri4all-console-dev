@@ -67,9 +67,18 @@ class StaticTextItem(pg.TextItem):
         self.updateTextPos()
 
 
+class SelectableRectROI(pg.RectROI):
+    clicked = pyqtSignal()
+
+    def mousePressEvent(self, event):
+        self.clicked.emit()
+        super().mousePressEvent(event)
+
+
 class ViewerWidget(QWidget):
 
     planning_changed = pyqtSignal()
+    region_selected = pyqtSignal(str)
     plot_xlim_changed = pyqtSignal(
         float,
         float,
@@ -102,6 +111,9 @@ class ViewerWidget(QWidget):
         self.planning_state = None
         self.planning_mode = "none"
         self.planning_editable = False
+        self.planning_scene = None
+        self.planning_region_id = None
+        self.peer_box_items = []
 
         # Orientation of THIS Localizer viewer
         # (Axial / Coronal / Sagittal).
@@ -177,6 +189,8 @@ class ViewerWidget(QWidget):
         # Overlay items belonged to the deleted ImageView.
         self.fov_projection_item = None
         self.fov_intersection_item = None
+
+        self.peer_box_items = []
 
         self._planning_interactions.clear()
 
@@ -302,12 +316,13 @@ class ViewerWidget(QWidget):
         orientation,
         planning_state,
         mode="gre",
+        editable=False,
     ):
-        """
-        Tell this viewer which localizer plane it represents
-        and which shared PlanningState it should use.
-        """
-        if mode not in ("localizer", "gre"):
+        if mode not in (
+            "gre",
+            "localizer",
+            "localizer_next",
+        ):
             raise ValueError(
                 f"Unsupported planning mode: {mode}"
             )
@@ -315,9 +330,28 @@ class ViewerWidget(QWidget):
         self.planning_orientation = orientation
         self.planning_state = planning_state
         self.planning_mode = mode
-        self.planning_orientation = orientation
-        self.planning_state = planning_state
-        self.planning_editable = False
+        self.planning_editable = bool(editable)
+
+        self.planning_scene = None
+        self.planning_region_id = None
+
+    def set_next_localizer_scene(
+        self,
+        scene,
+        orientation,
+        editable=True,
+    ):
+        region = scene.regions[orientation]
+
+        self.set_planning_context(
+            orientation=orientation,
+            planning_state=region.state,
+            mode="localizer_next",
+            editable=editable,
+        )
+
+        self.planning_scene = scene
+        self.planning_region_id = orientation
 
     def _clear_fov_geometry_overlay(
         self,
@@ -1257,11 +1291,14 @@ class ViewerWidget(QWidget):
         ):
             return
 
-        new_sizes = np.clip(
-            new_sizes,
-            0.02,
-            1.0,
-        )
+        if box.allow_outside_reference:
+            new_sizes = np.maximum(new_sizes, 1e-6)
+        else:
+            new_sizes = np.clip(
+                new_sizes,
+                0.02,
+                1.0,
+            )
 
         box.size_x = float(
             new_sizes[0]
@@ -1743,8 +1780,14 @@ class ViewerWidget(QWidget):
             fov_width,
             fov_height,
         ) = fov_rect
-        is_gre = self.planning_mode == "gre"
-        self.fov_roi = pg.RectROI(
+        can_edit_fov = (
+            self.planning_editable
+            and self.planning_mode in (
+                "gre",
+                "localizer_next",
+            )
+        )
+        self.fov_roi = SelectableRectROI(
             [fov_x, fov_y],
             [fov_width, fov_height],
             angle=fov_angle,
@@ -1752,17 +1795,23 @@ class ViewerWidget(QWidget):
                 "y",
                 width=2,
             ),
-            movable=is_gre,
-            rotatable=is_gre,
-            resizable=is_gre,
+            movable=can_edit_fov,
+            rotatable=can_edit_fov,
+            resizable=can_edit_fov,
         )
         self.widget.getView().addItem(
             self.fov_roi
         )
+        if self.planning_region_id is not None:
+            self.fov_roi.clicked.connect(
+                lambda: self.region_selected.emit(
+                    self.planning_region_id
+                )
+            )
         self.fov_roi.setZValue(
             40
         )
-        if is_gre:
+        if can_edit_fov:
             self.fov_roi.addRotateHandle(
                 [1.0, 0.0],
                 [0.5, 0.5],
@@ -1844,7 +1893,7 @@ class ViewerWidget(QWidget):
         # -------------------------------------------------
         # Connect interaction signals
         # -------------------------------------------------
-        if is_gre:
+        if can_edit_fov:
             self.fov_roi.sigRegionChangeStarted.connect(
                 self._fov_roi_change_started
             )
@@ -1863,7 +1912,10 @@ class ViewerWidget(QWidget):
         self.shim_roi.sigRegionChangeFinished.connect(
             self._shim_roi_change_finished
         )
-        if self.planning_mode == "gre":
+        if self.planning_mode in (
+            "gre",
+            "localizer_next",
+        ):
             self._apply_box_to_roi(
                 self.fov_roi,
                 self.planning_state.fov_box,
@@ -1875,6 +1927,7 @@ class ViewerWidget(QWidget):
         self._update_planning_labels()
         self._update_fov_basis_indicator()
         self._update_fov_geometry_overlay()
+        self.refresh_active_region_overlay()
 
     def _update_planning_labels(self):
         """
@@ -1929,8 +1982,18 @@ class ViewerWidget(QWidget):
         self,
         *args,
     ):
-        if self.planning_mode != "gre":
+        if (
+            not self.planning_editable
+            or self.planning_mode not in (
+                "gre",
+                "localizer_next",
+            )
+        ):
             return
+        if self.planning_region_id is not None:
+            self.region_selected.emit(
+                self.planning_region_id
+            )
         if (
             self.fov_roi is None
             or self.planning_state is None
@@ -1947,7 +2010,13 @@ class ViewerWidget(QWidget):
         self,
         *args,
     ):
-        if self.planning_mode != "gre":
+        if (
+            not self.planning_editable
+            or self.planning_mode not in (
+                "gre",
+                "localizer_next",
+            )
+        ):
             return
         if self.updating_planning_rois:
             return
@@ -1976,7 +2045,13 @@ class ViewerWidget(QWidget):
         self,
         *args,
     ):
-        if self.planning_mode != "gre":
+        if (
+            not self.planning_editable
+            or self.planning_mode not in (
+                "gre",
+                "localizer_next",
+            )
+        ):
             return
         if (
             self.fov_roi is None
@@ -2050,6 +2125,127 @@ class ViewerWidget(QWidget):
 
         self.planning_changed.emit()
 
+    def _clear_peer_box_overlays(self):
+        if isinstance(self.widget, pg.ImageView):
+            view = self.widget.getView()
+
+            for item in self.peer_box_items:
+                try:
+                    view.removeItem(item)
+                except (RuntimeError, ValueError):
+                    pass
+
+        self.peer_box_items = []
+
+
+    def refresh_active_region_overlay(self):
+        """
+        Show the selected future Localizer slab in the
+        OTHER Localizer image planes.
+
+        Solid: true 3D box / image-plane intersection.
+        Dashed: full 3D box projection.
+        """
+        self._clear_peer_box_overlays()
+
+        scene = self.planning_scene
+
+        if scene is None:
+            return
+
+        if self.planning_image_plane is None:
+            return
+
+        if not isinstance(self.widget, pg.ImageView):
+            return
+
+        selected_id = scene.active_id
+
+        # The current view already has its own interactive ROI.
+        if selected_id == self.planning_region_id:
+            return
+
+        region = scene.regions[selected_id]
+        box = region.state.fov_box
+
+        geometry = planning_box_to_scan_geometry(
+            fov_box=box.as_dict(),
+            reference_fov_mm=[
+                scene.reference_fov_m * 1000.0
+            ] * 3,
+            allow_outside_reference=True,
+        )
+
+        plane = self.planning_image_plane
+        view = self.widget.getView()
+
+        # Full 3D wireframe, projected into this 2D image.
+        edges = project_box_edges_to_plane_scanner_m(
+            geometry,
+            plane,
+        )
+
+        xy_edges = plane.scanner_to_image_xy(edges)
+
+        xs = []
+        ys = []
+
+        for edge in xy_edges:
+            xs.extend([
+                float(edge[0, 0]),
+                float(edge[1, 0]),
+                np.nan,
+            ])
+            ys.extend([
+                float(edge[0, 1]),
+                float(edge[1, 1]),
+                np.nan,
+            ])
+
+        projected_item = pg.PlotDataItem(
+            xs,
+            ys,
+            connect="finite",
+            pen=pg.mkPen(
+                (255, 170, 0, 170),
+                width=2,
+                style=Qt.DashLine,
+            ),
+        )
+
+        projected_item.setZValue(45)
+        view.addItem(projected_item)
+
+        self.peer_box_items.append(projected_item)
+
+        # The finite-thickness slab intersection.
+        points = intersect_box_with_plane_scanner_m(
+            geometry,
+            plane,
+        )
+
+        if len(points) >= 2:
+            xy = plane.scanner_to_image_xy(points)
+
+            if len(xy) >= 3:
+                xy = np.vstack([xy, xy[0]])
+
+            intersection_item = pg.PlotDataItem(
+                xy[:, 0],
+                xy[:, 1],
+                pen=pg.mkPen(
+                    (255, 170, 0),
+                    width=3,
+                ),
+            )
+
+            intersection_item.setZValue(46)
+            view.addItem(intersection_item)
+
+            self.peer_box_items.append(
+                intersection_item
+            )
+
     def refresh_planning_rois(self):
         """
         Refresh this viewer from the shared PlanningState.
@@ -2073,7 +2269,10 @@ class ViewerWidget(QWidget):
         self.updating_planning_rois = True
 
         try:
-            if self.planning_mode == "gre":
+            if self.planning_mode in (
+                "gre",
+                "localizer_next",
+            ):
                 self._apply_box_to_roi(
                     self.fov_roi,
                     self.planning_state.fov_box,
@@ -2093,6 +2292,8 @@ class ViewerWidget(QWidget):
         self._update_fov_basis_indicator()
 
         self._update_fov_geometry_overlay()
+
+        self.refresh_active_region_overlay()
 
     def set_reconstruction_overlay_context(
         self,
@@ -2533,6 +2734,11 @@ class ViewerWidget(QWidget):
         )
 
     def clear_planning_context(self):
+        self._clear_peer_box_overlays()
+        self.planning_scene = None
+        self.planning_region_id = None
+        self.planning_editable = False
+
         self._clear_fov_geometry_overlay()
         self.planning_mode = "none"
         self.planning_orientation = None

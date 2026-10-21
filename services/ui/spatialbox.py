@@ -24,61 +24,82 @@ class Box3D:
     rotation_y: float = 0.0
     rotation_z: float = 0.0
 
+    allow_outside_reference: bool = field(
+        default=False,
+        repr=False,
+        compare=False,
+    )
+
     def clamp(self):
-        """
-        Keep box inside normalized image volume.
-        """
+        import math
 
-        self.size_x = max(
-            0.02,
-            min(1.0, self.size_x),
+        values = (
+            self.center_x,
+            self.center_y,
+            self.center_z,
+            self.size_x,
+            self.size_y,
+            self.size_z,
+            self.rotation_x,
+            self.rotation_y,
+            self.rotation_z,
         )
 
-        self.size_y = max(
-            0.02,
-            min(1.0, self.size_y),
+        if not all(math.isfinite(v) for v in values):
+            raise ValueError("Non-finite planning geometry")
+
+        minimum = (
+            1e-6
+            if self.allow_outside_reference
+            else 0.02
         )
 
-        self.size_z = max(
-            0.02,
-            min(1.0, self.size_z),
+        maximum = (
+            float("inf")
+            if self.allow_outside_reference
+            else 1.0
         )
 
-        self.center_x = max(
-            self.size_x / 2.0,
-            min(
-                1.0 - self.size_x / 2.0,
-                self.center_x,
-            ),
-        )
+        # 1. Restrict box sizes.
+        for axis in "xyz":
+            attr = f"size_{axis}"
+            value = getattr(self, attr)
 
-        self.center_y = max(
-            self.size_y / 2.0,
-            min(
-                1.0 - self.size_y / 2.0,
-                self.center_y,
-            ),
-        )
+            setattr(
+                self,
+                attr,
+                max(minimum, min(maximum, value)),
+            )
 
-        self.center_z = max(
-            self.size_z / 2.0,
-            min(
-                1.0 - self.size_z / 2.0,
-                self.center_z,
-            ),
-        )
+        # 2. Restrict centers only for legacy boxes.
+        if not self.allow_outside_reference:
+            for axis in "xyz":
+                size = getattr(self, f"size_{axis}")
+                attr = f"center_{axis}"
+                center = getattr(self, attr)
 
-        self.rotation_x = (
-            (self.rotation_x + 180.0) % 360.0
-        ) - 180.0
+                setattr(
+                    self,
+                    attr,
+                    max(
+                        size / 2.0,
+                        min(
+                            1.0 - size / 2.0,
+                            center,
+                        ),
+                    ),
+                )
 
-        self.rotation_y = (
-            (self.rotation_y + 180.0) % 360.0
-        ) - 180.0
+        # 3. Normalize rotation angles.
+        for axis in "xyz":
+            attr = f"rotation_{axis}"
+            angle = getattr(self, attr)
 
-        self.rotation_z = (
-            (self.rotation_z + 180.0) % 360.0
-        ) - 180.0
+            setattr(
+                self,
+                attr,
+                (angle + 180.0) % 360.0 - 180.0,
+            )
 
     def as_dict(self):
         return {
@@ -128,4 +149,50 @@ class PlanningState:
         return {
             "fov_box": self.fov_box.as_dict(),
             "shim_box": self.shim_box.as_dict(),
+        }
+
+
+@dataclass
+class PlanningRegion:
+    id: str
+    state: PlanningState
+    editable: bool = True
+
+
+@dataclass
+class PlanningScene:
+    # Physical size of the reference coordinate cube.
+    reference_fov_m: float
+
+    # Stable source Localizer provenance.
+    source_localizer_id: str
+
+    # One region per next Localizer acquisition.
+    regions: dict[str, PlanningRegion] = field(
+        default_factory=dict
+    )
+
+    active_id: str = "Axial"
+
+    def select(self, region_id: str):
+        if region_id not in self.regions:
+            raise KeyError(region_id)
+        self.active_id = region_id
+
+    @property
+    def active_region(self) -> PlanningRegion:
+        return self.regions[self.active_id]
+
+    def as_dict(self) -> dict:
+        return {
+            "version": 1,
+            "coordinate_system": "scanner_xyz_v1",
+            "source_localizer_id": self.source_localizer_id,
+            "reference_fov_mm": [
+                self.reference_fov_m * 1000.0
+            ] * 3,
+            "boxes": {
+                name: region.state.fov_box.as_dict()
+                for name, region in self.regions.items()
+            },
         }
