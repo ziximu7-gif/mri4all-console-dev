@@ -1197,10 +1197,15 @@ class ExaminationWindow(QMainWindow):
             scan_task.sequence == "localizer"
             and not read_only
         ):
-            self._show_next_localizer_planning(
+            success = self._show_next_localizer_planning(
                 scan_task,
                 editable=True,
             )
+
+            if success:
+                sequence_ui_container.FOV_SpinBox.valueChanged.connect(
+                    self._next_localizer_fov_changed
+                )
 
         if scan_task.sequence == "gre_3D":
             sequence = ui_runtime.editor_sequence_instance
@@ -2521,7 +2526,25 @@ class ExaminationWindow(QMainWindow):
                 and result_item.type
                 == "dicom"
             ):
-                self._refresh_planning3d_localizer_images()
+                if not ui_runtime.editor_active:
+                    preview_task = copy.deepcopy(scan_task)
+                    preview_task.other.pop(
+                        "next_localizer", None
+                    )
+
+                    success = self._show_next_localizer_planning(
+                        target_task=preview_task,
+                        editable=True,
+                        reference_source=(
+                            scan_path,
+                            scan_task,
+                        ),
+                    )
+
+                    if not success:
+                        self._refresh_planning3d_localizer_images()
+                else:
+                    self._refresh_planning3d_localizer_images()
         elif target_viewer == "flex":
             self.show_result_in_flex_viewer(
                 scan_path,
@@ -2693,7 +2716,31 @@ class ExaminationWindow(QMainWindow):
             scan_task.sequence
             == "localizer"
         ):
-            self._refresh_planning3d_localizer_images()
+            if not ui_runtime.editor_active:
+                # This task is the acquired reference image.
+                # Build an independent, temporary prescription
+                # for the NEXT Localizer scan.
+                preview_task = copy.deepcopy(scan_task)
+
+                # Do not interpret old acquisition metadata as
+                # the next planned prescription.
+                preview_task.other.pop(
+                    "next_localizer", None
+                )
+
+                success = self._show_next_localizer_planning(
+                    target_task=preview_task,
+                    editable=True,
+                    reference_source=(
+                        scan_path,
+                        scan_task,
+                    ),
+                )
+
+                if not success:
+                    self._refresh_planning3d_localizer_images()
+            else:
+                self._refresh_planning3d_localizer_images()
 
     def queue_selection_changed(self):
         index = self.queueWidget.currentRow()
@@ -2786,14 +2833,61 @@ class ExaminationWindow(QMainWindow):
         cfg.update()
         pass
     
+    def _next_localizer_fov_changed(self, fov_cm):
+        scene = self._next_localizer_scene
+
+        if scene is None:
+            return
+
+        fov_m = float(cm_to_m(fov_cm))
+
+        if fov_m <= 0:
+            return
+
+        new_size_norm = (
+            fov_m / scene.reference_fov_m
+        )
+
+        plane_axes = {
+            "Axial": ("x", "y"),
+            "Coronal": ("x", "z"),
+            "Sagittal": ("y", "z"),
+        }
+
+        for name, axes in plane_axes.items():
+            box = scene.regions[name].state.fov_box
+
+            for axis in axes:
+                setattr(
+                    box,
+                    f"size_{axis}",
+                    new_size_norm,
+                )
+
+            box.clamp()
+
+        for viewer in (
+            self.viewer1,
+            self.viewer2,
+            self.viewer3,
+        ):
+            viewer.refresh_planning_rois()
+
+        self.planning3d.refresh_planning_geometry()
+        self.planning3d.refresh_other_region_wireframes()
+
     def _show_next_localizer_planning(
         self,
         target_task,
         editable=True,
+        reference_source=None,
     ):
-        result = self._find_localizer_for_gre(
-            target_task
-        )
+        if reference_source is not None:
+            result = reference_source
+        else:
+            result = self._find_localizer_for_gre(
+                target_task
+            )
 
         if result is None:
             log.warning(

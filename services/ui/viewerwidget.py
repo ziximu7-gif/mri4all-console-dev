@@ -397,7 +397,10 @@ class ViewerWidget(QWidget):
         """
         
         self._clear_fov_geometry_overlay()
-        if self.planning_mode != "gre":
+        if self.planning_mode not in (
+            "gre",
+            "localizer_next",
+        ):
             return
         if self.planning_state is None:
             return
@@ -426,17 +429,14 @@ class ViewerWidget(QWidget):
             dtype=float,
         )
 
-        scan_geometry = (
-            planning_box_to_scan_geometry(
-                fov_box=(
-                    self.planning_state
-                    .fov_box
-                    .as_dict()
-                ),
-                reference_fov_mm=(
-                    reference_fov_mm
-                ),
-            )
+        scan_geometry = planning_box_to_scan_geometry(
+            fov_box=self.planning_state.fov_box.as_dict(),
+            reference_fov_mm=reference_fov_mm,
+            allow_outside_reference=(
+                self.planning_state
+                .fov_box
+                .allow_outside_reference
+            ),
         )
 
         view = self.widget.getView()
@@ -1973,6 +1973,10 @@ class ViewerWidget(QWidget):
         if self.planning_mode == "localizer":
             self.fov_label.setText(
                 "Localizer Acquisition FOV"
+            )
+        elif self.planning_mode == "localizer_next":
+            self.fov_label.setText(
+                f"Next Localizer FOV  {fov_angle:.1f} deg"
             )
         else:
             self.fov_label.setText(
