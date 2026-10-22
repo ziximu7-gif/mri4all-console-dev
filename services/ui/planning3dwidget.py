@@ -1971,16 +1971,6 @@ class Planning3DWidget(QWidget):
             sign,
         ) = spec
 
-        if self.planning_scene is not None:
-            thickness_axis = {
-                "Axial": 2,
-                "Coronal": 1,
-                "Sagittal": 0,
-            }[self.planning_scene.active_id]
-
-            if axis_index != thickness_axis:
-                return
-
         box = (
             self.planning_state
             .fov_box

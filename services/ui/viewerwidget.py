@@ -492,6 +492,23 @@ class ViewerWidget(QWidget):
             self.fov_projection_item
         )
 
+        if (
+            self.planning_mode == "localizer_next"
+            and not self.planning_editable
+            and self.planning_region_id is not None
+        ):
+            self.fov_projection_item.setCurveClickable(
+                True,
+                width=10,
+            )
+
+            region_id = self.planning_region_id
+
+            self.fov_projection_item.sigClicked.connect(
+                lambda *args, name=region_id:
+                    self.region_selected.emit(name)
+            )
+
         # -------------------------------------------------
         # Solid: true FOV / current Localizer intersection
         # -------------------------------------------------
@@ -541,6 +558,23 @@ class ViewerWidget(QWidget):
         view.addItem(
             self.fov_intersection_item
         )
+
+        if (
+            self.planning_mode == "localizer_next"
+            and not self.planning_editable
+            and self.planning_region_id is not None
+        ):
+            self.fov_intersection_item.setCurveClickable(
+                True,
+                width=10,
+            )
+
+            region_id = self.planning_region_id
+
+            self.fov_intersection_item.sigClicked.connect(
+                lambda *args, name=region_id:
+                    self.region_selected.emit(name)
+            )
 
     def _plane_axes(self):
         """
@@ -1788,14 +1822,32 @@ class ViewerWidget(QWidget):
                 "localizer_next",
             )
         )
-        self.fov_roi = pg.RectROI(
+
+        # Read-only Localizer: the geometry overlay is
+        # the visible FOV. ROI is only a click target.
+        locked_next_localizer = (
+            self.planning_mode == "localizer_next"
+            and not self.planning_editable
+        )
+
+        roi_class = (
+            pg.ROI
+            if locked_next_localizer
+            else pg.RectROI
+        )
+
+        roi_pen = (
+            pg.mkPen((0, 0, 0, 0))
+            if locked_next_localizer
+            else pg.mkPen("y", width=2)
+        )
+
+        self.fov_roi = roi_class(
             [fov_x, fov_y],
             [fov_width, fov_height],
             angle=fov_angle,
-            pen=pg.mkPen(
-                "y",
-                width=2,
-            ),
+            pen=roi_pen,
+            hoverPen=roi_pen,
             movable=can_edit_fov,
             rotatable=can_edit_fov,
             resizable=can_edit_fov,
@@ -2172,17 +2224,23 @@ class ViewerWidget(QWidget):
 
         # Emphasize this viewer's ROI only when selected.
         if self.fov_roi is not None:
-            is_self_selected = (
-                active_id == self.planning_region_id
-            )
+            if (
+                self.planning_mode == "localizer_next"
+                and not self.planning_editable
+            ):
+                # Keep the read-only interaction ROI invisible.
+                self.fov_roi.setPen(
+                    pg.mkPen((0, 0, 0, 0))
+                )
 
-            if is_self_selected:
+            elif active_id == self.planning_region_id:
                 self.fov_roi.setPen(
                     pg.mkPen(
                         (255, 215, 0, 255),
                         width=3,
                     )
                 )
+
             else:
                 self.fov_roi.setPen(
                     pg.mkPen(
