@@ -46,6 +46,7 @@ from pathlib import Path
 from services.ui.spatialbox import Box3D
 from sequences.common.planning import (
     make_next_localizer_scene,
+    localizer_plan_matches_legacy_acquisition,
 )
 
 log = logger.get_logger()
@@ -1513,6 +1514,47 @@ class ExaminationWindow(QMainWindow):
                 "Other additional parameters have invalid format. Please validate JSON syntax."
             )
 
+        # Validate planned Localizer geometry before
+        # allowing this scan to become PREPARED.
+        if (
+            parameters_valid
+            and not ui_runtime.editor_readonly
+            and ui_runtime.editor_scantask.sequence
+                == "localizer"
+            and self._next_localizer_scene is not None
+        ):
+            candidate = copy.deepcopy(
+                ui_runtime.editor_scantask
+            )
+
+            candidate.parameters = (
+                ui_runtime.editor_sequence_instance
+                .get_parameters()
+            )
+
+            candidate.other = json.loads(
+                self.otherParametersTextEdit.toPlainText()
+            )
+
+            candidate.other["next_localizer"] = (
+                self._next_localizer_scene.as_dict()
+            )
+
+            if not localizer_plan_matches_legacy_acquisition(
+                candidate
+            ):
+                parameters_valid = False
+
+                problems_list.append(
+                    "This Localizer planning geometry "
+                    "cannot yet be acquired. "
+                    "The current sequence generator supports "
+                    "only centered, orthogonal Axial, Coronal, "
+                    "and Sagittal slices. "
+                    "Move/rotation/independent resizing requires "
+                    "oblique acquisition support."
+                )
+
         if not parameters_valid:
             self.scanParametersWidget.setTabVisible(5, True)
             self.scanParametersWidget.setStyleSheet(scanParameters_stylesheet_error)
@@ -2534,7 +2576,7 @@ class ExaminationWindow(QMainWindow):
 
                     success = self._show_next_localizer_planning(
                         target_task=preview_task,
-                        editable=True,
+                        editable=False,
                         reference_source=(
                             scan_path,
                             scan_task,
@@ -2730,7 +2772,7 @@ class ExaminationWindow(QMainWindow):
 
                 success = self._show_next_localizer_planning(
                     target_task=preview_task,
-                    editable=True,
+                    editable=False,
                     reference_source=(
                         scan_path,
                         scan_task,
@@ -3084,7 +3126,7 @@ class ExaminationWindow(QMainWindow):
             show_fov=True,
         )
 
-        self.planning3d.planning_editable = bool(
+        self.planning3d.set_planning_editable(
             editable
         )
 

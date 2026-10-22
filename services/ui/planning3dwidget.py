@@ -1215,6 +1215,57 @@ class Planning3DWidget(QWidget):
                 handle_id
             ] = handle_item
 
+        # -------------------------------------------------
+        # Rotation handles for scanner X / Y / Z.
+        # -------------------------------------------------
+
+        self.fov_rotate_handle_items = {}
+
+        self.fov_rotate_directions = {
+            "rotate_x": np.array(
+                [0.0, 1.0, 1.0], dtype=float
+            ) / np.sqrt(2.0),
+
+            "rotate_y": np.array(
+                [1.0, 0.0, 1.0], dtype=float
+            ) / np.sqrt(2.0),
+
+            "rotate_z": np.array(
+                [1.0, 1.0, 0.0], dtype=float
+            ) / np.sqrt(2.0),
+        }
+
+        self.fov_rotate_colors = {
+            "rotate_x": (1.0, 0.3, 0.3, 1.0),
+            "rotate_y": (0.3, 1.0, 0.4, 1.0),
+            "rotate_z": (0.4, 0.6, 1.0, 1.0),
+        }
+
+        for handle_id, color in (
+            self.fov_rotate_colors.items()
+        ):
+            item = gl.GLScatterPlotItem(
+                pos=np.zeros((1, 3), dtype=float),
+                color=color,
+                size=18.0,
+                pxMode=True,
+                glOptions=PLANNING_OVERLAY_GL_OPTIONS,
+            )
+
+            item.setDepthValue(4)
+            item.hide()
+
+            self.view.addItem(item)
+
+            self.view.register_planning_handle(
+                item,
+                handle_id,
+            )
+
+            self.fov_rotate_handle_items[
+                handle_id
+            ] = item
+
         # Start from the same camera state used by HOME.
         self.reset_camera()
 
@@ -1809,6 +1860,25 @@ class Planning3DWidget(QWidget):
         handle_id = str(
             handle_id
         )
+
+        if handle_id.startswith("rotate_"):
+            axis = handle_id.split("_", 1)[1].upper()
+
+            angle_delta = (
+                0.3 * (
+                    float(delta_x_pixels)
+                    - float(delta_y_pixels)
+                )
+            )
+
+            self._rotate_fov_scanner_axis_delta(
+                axis,
+                angle_delta,
+            )
+
+            self.refresh_planning_geometry()
+            self.planning_changed.emit()
+            return
 
         if handle_id.startswith(
             "face_"
@@ -2946,6 +3016,21 @@ class Planning3DWidget(QWidget):
         )
 
 
+    def set_planning_editable(self, editable):
+        self.planning_editable = bool(editable)
+
+        for control in (
+            self.fov_action_combo,
+            self.fov_axis_combo,
+            self.fov_minus_button,
+            self.fov_plus_button,
+        ):
+            control.setEnabled(
+                self.planning_editable
+            )
+
+        self.refresh_planning_geometry()
+
     def set_multi_region_scene(
         self,
         scene,
@@ -2959,7 +3044,7 @@ class Planning3DWidget(QWidget):
         )
 
         self.planning_scene = scene
-        self.planning_editable = bool(editable)
+        self.set_planning_editable(editable)
 
         self.region_combo.blockSignals(True)
         self.region_combo.clear()
@@ -3041,7 +3126,7 @@ class Planning3DWidget(QWidget):
             if item is None:
                 item = gl.GLLinePlotItem(
                     pos=points,
-                    color=(0.4, 0.8, 1.0, 0.75),
+                    color=(0.45, 0.65, 0.75, 0.25),
                     width=2,
                     antialias=True,
                     mode="lines",
@@ -3057,7 +3142,7 @@ class Planning3DWidget(QWidget):
 
             item.setData(
                 pos=points,
-                color=(0.4, 0.8, 1.0, 0.75),
+                color=(0.45, 0.65, 0.75, 0.25),
                 width=2,
                 antialias=True,
                 mode="lines",
@@ -3081,6 +3166,14 @@ class Planning3DWidget(QWidget):
         self.planning_scene = None
         self.region_combo.hide()
         self.planning_editable = False
+
+        for control in (
+            self.fov_action_combo,
+            self.fov_axis_combo,
+            self.fov_minus_button,
+            self.fov_plus_button,
+        ):
+            control.setEnabled(False)
 
         self.show_planning_fov = bool(show_fov)
         reference_fov_m = float(
@@ -3123,6 +3216,14 @@ class Planning3DWidget(QWidget):
         self.planning_scene = None
         self.region_combo.hide()
         self.planning_editable = False
+
+        for control in (
+            self.fov_action_combo,
+            self.fov_axis_combo,
+            self.fov_minus_button,
+            self.fov_plus_button,
+        ):
+            control.setEnabled(False)
 
         self.planning_state = None
         self.reference_fov_m = None
@@ -3768,6 +3869,9 @@ class Planning3DWidget(QWidget):
         No geometry is inferred from any 2D ROI.
         """
 
+        for item in self.fov_rotate_handle_items.values():
+            item.hide()
+
         if (
             self.planning_state is None
             or not self.show_planning_fov
@@ -4142,3 +4246,59 @@ class Planning3DWidget(QWidget):
             self.fov_move_axis_items[
                 handle_id
             ].show()
+
+        # -------------------------------------------------
+        # Rotation handles: outside the current box.
+        # -------------------------------------------------
+
+        if self.planning_editable:
+            center = np.asarray(
+                scan_geometry.center_scanner_m,
+                dtype=float,
+            )
+
+            sizes = np.asarray(
+                scan_geometry.fov_local_m,
+                dtype=float,
+            )
+
+            radius = (
+                0.5 * float(np.linalg.norm(sizes))
+                + 0.015
+            )
+
+            for handle_id, item in (
+                self.fov_rotate_handle_items.items()
+            ):
+                direction = (
+                    self.fov_rotate_directions[
+                        handle_id
+                    ]
+                )
+
+                position = (
+                    center + radius * direction
+                )
+
+                item.setData(
+                    pos=position.reshape(1, 3),
+                    color=self.fov_rotate_colors[
+                        handle_id
+                    ],
+                    size=18.0,
+                    pxMode=True,
+                )
+
+                item.show()
+
+        else:
+            # Keep the Box visible, but do not allow
+            # direct manipulation in read-only mode.
+            for group in (
+                self.fov_corner_handle_items,
+                self.fov_face_handle_items,
+                self.fov_move_handle_items,
+                self.fov_move_axis_items,
+            ):
+                for item in group.values():
+                    item.hide()

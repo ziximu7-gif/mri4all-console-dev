@@ -67,14 +67,6 @@ class StaticTextItem(pg.TextItem):
         self.updateTextPos()
 
 
-class SelectableRectROI(pg.RectROI):
-    clicked = pyqtSignal()
-
-    def mousePressEvent(self, event):
-        self.clicked.emit()
-        super().mousePressEvent(event)
-
-
 class ViewerWidget(QWidget):
 
     planning_changed = pyqtSignal()
@@ -1787,7 +1779,7 @@ class ViewerWidget(QWidget):
                 "localizer_next",
             )
         )
-        self.fov_roi = SelectableRectROI(
+        self.fov_roi = pg.RectROI(
             [fov_x, fov_y],
             [fov_width, fov_height],
             angle=fov_angle,
@@ -1803,10 +1795,13 @@ class ViewerWidget(QWidget):
             self.fov_roi
         )
         if self.planning_region_id is not None:
-            self.fov_roi.clicked.connect(
-                lambda: self.region_selected.emit(
-                    self.planning_region_id
-                )
+            self.fov_roi.setAcceptedMouseButtons(
+                Qt.LeftButton
+            )
+            region_id = self.planning_region_id
+            self.fov_roi.sigClicked.connect(
+                lambda _roi, _event, name=region_id:
+                    self.region_selected.emit(name)
             )
         self.fov_roi.setZValue(
             40
@@ -2144,16 +2139,15 @@ class ViewerWidget(QWidget):
 
     def refresh_active_region_overlay(self):
         """
-        Show the selected future Localizer slab in the
-        OTHER Localizer image planes.
+        Always display the other Localizer slabs.
 
-        Solid: true 3D box / image-plane intersection.
-        Dashed: full 3D box projection.
+        Selected region: bright orange.
+        Unselected regions: faint blue-grey.
+        This viewer's own region: represented by its ROI.
         """
         self._clear_peer_box_overlays()
 
         scene = self.planning_scene
-
         if scene is None:
             return
 
@@ -2163,89 +2157,145 @@ class ViewerWidget(QWidget):
         if not isinstance(self.widget, pg.ImageView):
             return
 
-        selected_id = scene.active_id
-
-        # The current view already has its own interactive ROI.
-        if selected_id == self.planning_region_id:
-            return
-
-        region = scene.regions[selected_id]
-        box = region.state.fov_box
-
-        geometry = planning_box_to_scan_geometry(
-            fov_box=box.as_dict(),
-            reference_fov_mm=[
-                scene.reference_fov_m * 1000.0
-            ] * 3,
-            allow_outside_reference=True,
-        )
-
-        plane = self.planning_image_plane
+        active_id = scene.active_id
         view = self.widget.getView()
+        plane = self.planning_image_plane
 
-        # Full 3D wireframe, projected into this 2D image.
-        edges = project_box_edges_to_plane_scanner_m(
-            geometry,
-            plane,
-        )
+        # Emphasize this viewer's ROI only when selected.
+        if self.fov_roi is not None:
+            is_self_selected = (
+                active_id == self.planning_region_id
+            )
 
-        xy_edges = plane.scanner_to_image_xy(edges)
+            if is_self_selected:
+                self.fov_roi.setPen(
+                    pg.mkPen(
+                        (255, 215, 0, 255),
+                        width=3,
+                    )
+                )
+            else:
+                self.fov_roi.setPen(
+                    pg.mkPen(
+                        (175, 165, 110, 150),
+                        width=1.5,
+                    )
+                )
 
-        xs = []
-        ys = []
+        for region_id, region in scene.regions.items():
+            # Own Box already has a native interactive ROI.
+            if region_id == self.planning_region_id:
+                continue
 
-        for edge in xy_edges:
-            xs.extend([
-                float(edge[0, 0]),
-                float(edge[1, 0]),
-                np.nan,
-            ])
-            ys.extend([
-                float(edge[0, 1]),
-                float(edge[1, 1]),
-                np.nan,
-            ])
+            selected = (region_id == active_id)
 
-        projected_item = pg.PlotDataItem(
-            xs,
-            ys,
-            connect="finite",
-            pen=pg.mkPen(
-                (255, 170, 0, 170),
-                width=2,
-                style=Qt.DashLine,
-            ),
-        )
+            if selected:
+                # Bright selected Box.
+                projection_color = (
+                    255, 165, 0, 175
+                )
+                intersection_color = (
+                    255, 165, 0, 255
+                )
+                projection_width = 2
+                intersection_width = 3
+                z_value = 46
+            else:
+                # Low-contrast, always-visible Box.
+                projection_color = (
+                    110, 145, 170, 45
+                )
+                intersection_color = (
+                    130, 165, 185, 95
+                )
+                projection_width = 1
+                intersection_width = 1.5
+                z_value = 15
 
-        projected_item.setZValue(45)
-        view.addItem(projected_item)
+            box = region.state.fov_box
 
-        self.peer_box_items.append(projected_item)
+            geometry = planning_box_to_scan_geometry(
+                fov_box=box.as_dict(),
+                reference_fov_mm=[
+                    scene.reference_fov_m * 1000.0
+                ] * 3,
+                allow_outside_reference=True,
+            )
 
-        # The finite-thickness slab intersection.
-        points = intersect_box_with_plane_scanner_m(
-            geometry,
-            plane,
-        )
+            # Dashed 3D projection.
+            projected_edges = (
+                project_box_edges_to_plane_scanner_m(
+                    geometry,
+                    plane,
+                )
+            )
 
-        if len(points) >= 2:
+            xy_edges = plane.scanner_to_image_xy(
+                projected_edges
+            )
+
+            xs = []
+            ys = []
+
+            for edge in xy_edges:
+                xs.extend([
+                    float(edge[0, 0]),
+                    float(edge[1, 0]),
+                    np.nan,
+                ])
+                ys.extend([
+                    float(edge[0, 1]),
+                    float(edge[1, 1]),
+                    np.nan,
+                ])
+
+            projection_item = pg.PlotDataItem(
+                xs,
+                ys,
+                connect="finite",
+                pen=pg.mkPen(
+                    projection_color,
+                    width=projection_width,
+                    style=Qt.DashLine,
+                ),
+            )
+            projection_item.setZValue(z_value)
+
+            view.addItem(projection_item)
+            self.peer_box_items.append(
+                projection_item
+            )
+
+            # Solid intersection with this image plane.
+            points = intersect_box_with_plane_scanner_m(
+                geometry,
+                plane,
+            )
+
+            if points.shape[0] < 2:
+                continue
+
             xy = plane.scanner_to_image_xy(points)
 
-            if len(xy) >= 3:
-                xy = np.vstack([xy, xy[0]])
+            if xy.shape[0] >= 3:
+                xy = np.vstack([
+                    xy,
+                    xy[0],
+                ])
 
             intersection_item = pg.PlotDataItem(
                 xy[:, 0],
                 xy[:, 1],
                 pen=pg.mkPen(
-                    (255, 170, 0),
-                    width=3,
+                    intersection_color,
+                    width=intersection_width,
                 ),
             )
+            intersection_item.setZValue(
+                z_value + 1
+            )
 
-            intersection_item.setZValue(46)
             view.addItem(intersection_item)
-
             self.peer_box_items.append(
                 intersection_item
             )
