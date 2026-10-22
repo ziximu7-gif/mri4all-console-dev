@@ -256,11 +256,28 @@ def make_next_localizer_scene(
             ),
         )
 
+    reset_boxes = {}
+
+    for name, dimensions in defaults.items():
+        reset_boxes[name] = Box3D(
+            center_x=0.5,
+            center_y=0.5,
+            center_z=0.5,
+            size_x=dimensions[0],
+            size_y=dimensions[1],
+            size_z=dimensions[2],
+            rotation_x=0.0,
+            rotation_y=0.0,
+            rotation_z=0.0,
+            allow_outside_reference=True,
+        ).as_dict()
+
     return PlanningScene(
         reference_fov_m=reference_m,
         source_localizer_id=source_task.id,
         regions=regions,
         active_id="Axial",
+        reset_boxes=reset_boxes,
     )
 
 

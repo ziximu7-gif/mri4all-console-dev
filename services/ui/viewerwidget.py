@@ -1212,27 +1212,18 @@ class ViewerWidget(QWidget):
         target_size,
     ):
         """
-        Resize the 3D box while preserving
-        the current 3D rotation.
+        Convert 2D ROI resizing into Box3D dimensions.
 
-        A 2D projection provides two size
-        constraints for three Box3D sizes,
-        so use the minimum-change solution.
+        Localizer: adjust only its two in-plane axes.
+        GRE: preserve the existing 3D minimum-change
+        resizing behavior.
         """
-
-        projection = (
-            self._projection_components(
-                box
-            )
-        )
+        projection = self._projection_components(box)
 
         if projection is None:
             return
 
-        (
-            size_matrix,
-            _,
-        ) = projection
+        size_matrix, _angle = projection
 
         current_sizes = np.array(
             [
@@ -1243,66 +1234,84 @@ class ViewerWidget(QWidget):
             dtype=float,
         )
 
-        current_projection = (
-            size_matrix
-            @ current_sizes
+        target_size = np.asarray(
+            target_size,
+            dtype=float,
         )
 
         projection_error = (
             target_size
-            - current_projection
+            - size_matrix @ current_sizes
         )
 
-        # Minimum-norm size correction:
-        #
-        #     A * ds = requested 2D change
-        #
-        # This automatically gives the intuitive
-        # result at zero rotation:
-        #
-        # Axial    -> X / Y
-        # Coronal  -> X / Z
-        # Sagittal -> Y / Z
-        delta_sizes = (
-            np.linalg.pinv(
+        if self.planning_mode == "localizer_next":
+            # Keep the slice-normal dimension fixed.
+            in_plane_indices = {
+                "Axial": (0, 1),
+                "Coronal": (0, 2),
+                "Sagittal": (1, 2),
+            }.get(self.planning_orientation)
+
+            if in_plane_indices is None:
+                return
+
+            in_plane_matrix = size_matrix[
+                :, list(in_plane_indices)
+            ]
+
+            # Some oblique projections cannot uniquely
+            # determine both in-plane dimensions.
+            if (
+                np.linalg.matrix_rank(
+                    in_plane_matrix,
+                    tol=1e-6,
+                ) < 2
+            ):
+                return
+
+            if np.linalg.cond(in_plane_matrix) > 1e4:
+                return
+
+            delta = np.linalg.solve(
+                in_plane_matrix,
+                projection_error,
+            )
+
+            new_sizes = current_sizes.copy()
+
+            for index, change in zip(
+                in_plane_indices,
+                delta,
+            ):
+                new_sizes[index] = max(
+                    1e-6,
+                    current_sizes[index] + change,
+                )
+
+        else:
+            # Existing GRE resizing behavior.
+            delta_sizes = np.linalg.pinv(
                 size_matrix,
                 rcond=1e-6,
-            )
-            @ projection_error
-        )
+            ) @ projection_error
 
-        new_sizes = (
-            current_sizes
-            + delta_sizes
-        )
+            new_sizes = current_sizes + delta_sizes
 
-        if not np.all(
-            np.isfinite(
-                new_sizes
-            )
-        ):
+            if box.allow_outside_reference:
+                new_sizes = np.maximum(
+                    new_sizes, 1e-6
+                )
+            else:
+                new_sizes = np.clip(
+                    new_sizes, 0.02, 1.0
+                )
+
+        if not np.all(np.isfinite(new_sizes)):
             return
 
-        if box.allow_outside_reference:
-            new_sizes = np.maximum(new_sizes, 1e-6)
-        else:
-            new_sizes = np.clip(
-                new_sizes,
-                0.02,
-                1.0,
-            )
-
-        box.size_x = float(
-            new_sizes[0]
-        )
-
-        box.size_y = float(
-            new_sizes[1]
-        )
-
-        box.size_z = float(
-            new_sizes[2]
-        )
+        box.size_x = float(new_sizes[0])
+        box.size_y = float(new_sizes[1])
+        box.size_z = float(new_sizes[2])
 
 
     def _plane_delta_rotation(

@@ -718,24 +718,24 @@ class Planning3DWidget(QWidget):
             self.sagittal_button
         )
 
-        self.iso_button = (
-            QToolButton()
+        self.fov_reset_button = QToolButton()
+
+        self.fov_reset_button.setText(
+            "RESET FOV"
         )
 
-        self.iso_button.setText(
-            "ISO"
+        self.fov_reset_button.setToolTip(
+            "Reset the selected FOV geometry"
         )
 
-        self.iso_button.setToolTip(
-            "Isometric camera view"
-        )
+        self.fov_reset_button.setEnabled(False)
 
-        self.iso_button.clicked.connect(
-            self.set_camera_iso
+        self.fov_reset_button.clicked.connect(
+            self.reset_selected_fov
         )
 
         camera_layout.addWidget(
-            self.iso_button
+            self.fov_reset_button
         )
 
         self.home_button = (
@@ -935,6 +935,10 @@ class Planning3DWidget(QWidget):
         self.planning_scene = None
         self.other_region_items = {}
         self.planning_editable = False
+
+        # Geometry captured when a GRE planning context
+        # is opened, used by the RESET FOV button.
+        self._fov_reset_snapshot = None
 
         # -------------------------------------------------
         # GL scene items
@@ -1215,57 +1219,6 @@ class Planning3DWidget(QWidget):
                 handle_id
             ] = handle_item
 
-        # -------------------------------------------------
-        # Rotation handles for scanner X / Y / Z.
-        # -------------------------------------------------
-
-        self.fov_rotate_handle_items = {}
-
-        self.fov_rotate_directions = {
-            "rotate_x": np.array(
-                [0.0, 1.0, 1.0], dtype=float
-            ) / np.sqrt(2.0),
-
-            "rotate_y": np.array(
-                [1.0, 0.0, 1.0], dtype=float
-            ) / np.sqrt(2.0),
-
-            "rotate_z": np.array(
-                [1.0, 1.0, 0.0], dtype=float
-            ) / np.sqrt(2.0),
-        }
-
-        self.fov_rotate_colors = {
-            "rotate_x": (1.0, 0.3, 0.3, 1.0),
-            "rotate_y": (0.3, 1.0, 0.4, 1.0),
-            "rotate_z": (0.4, 0.6, 1.0, 1.0),
-        }
-
-        for handle_id, color in (
-            self.fov_rotate_colors.items()
-        ):
-            item = gl.GLScatterPlotItem(
-                pos=np.zeros((1, 3), dtype=float),
-                color=color,
-                size=18.0,
-                pxMode=True,
-                glOptions=PLANNING_OVERLAY_GL_OPTIONS,
-            )
-
-            item.setDepthValue(4)
-            item.hide()
-
-            self.view.addItem(item)
-
-            self.view.register_planning_handle(
-                item,
-                handle_id,
-            )
-
-            self.fov_rotate_handle_items[
-                handle_id
-            ] = item
-
         # Start from the same camera state used by HOME.
         self.reset_camera()
 
@@ -1349,19 +1302,6 @@ class Planning3DWidget(QWidget):
         self._set_camera_view(
             self.SAGITTAL_CAMERA_ELEVATION_DEG,
             self.SAGITTAL_CAMERA_AZIMUTH_DEG,
-        )
-
-    def set_camera_iso(
-        self,
-    ):
-        """
-        Restore the standard oblique orientation while
-        preserving the current zoom.
-        """
-
-        self._set_camera_view(
-            self.HOME_CAMERA_ELEVATION_DEG,
-            self.HOME_CAMERA_AZIMUTH_DEG,
         )
 
     def reset_camera(
@@ -1861,25 +1801,6 @@ class Planning3DWidget(QWidget):
             handle_id
         )
 
-        if handle_id.startswith("rotate_"):
-            axis = handle_id.split("_", 1)[1].upper()
-
-            angle_delta = (
-                0.3 * (
-                    float(delta_x_pixels)
-                    - float(delta_y_pixels)
-                )
-            )
-
-            self._rotate_fov_scanner_axis_delta(
-                axis,
-                angle_delta,
-            )
-
-            self.refresh_planning_geometry()
-            self.planning_changed.emit()
-            return
-
         if handle_id.startswith(
             "face_"
         ):
@@ -1901,15 +1822,21 @@ class Planning3DWidget(QWidget):
             )
             return
 
-        if handle_id.startswith(
-            "corner_"
-        ):
-            self._drag_fov_corner_handle(
-                handle_id,
-                delta_x_pixels,
-                delta_y_pixels,
-                symmetric_resize,
-            )
+        if handle_id.startswith("corner_"):
+            if self.planning_scene is not None:
+                self._drag_localizer_corner_rotation(
+                    handle_id,
+                    delta_x_pixels,
+                    delta_y_pixels,
+                )
+            else:
+                self._drag_fov_corner_handle(
+                    handle_id,
+                    delta_x_pixels,
+                    delta_y_pixels,
+                    symmetric_resize,
+                )
+            return
 
     def _project_scanner_point_to_widget(
         self,
@@ -2043,6 +1970,16 @@ class Planning3DWidget(QWidget):
             axis_index,
             sign,
         ) = spec
+
+        if self.planning_scene is not None:
+            thickness_axis = {
+                "Axial": 2,
+                "Coronal": 1,
+                "Sagittal": 0,
+            }[self.planning_scene.active_id]
+
+            if axis_index != thickness_axis:
+                return
 
         box = (
             self.planning_state
@@ -2224,14 +2161,19 @@ class Planning3DWidget(QWidget):
             )
         )
 
-        new_size = float(
-            np.clip(
-                current_size
-                + size_delta_norm,
-                0.02,
-                1.0,
+        if box.allow_outside_reference:
+            new_size = max(
+                1e-6,
+                current_size + size_delta_norm,
             )
-        )
+        else:
+            new_size = float(
+                np.clip(
+                    current_size + size_delta_norm,
+                    0.02,
+                    1.0,
+                )
+            )
 
         actual_size_delta_norm = (
             new_size
@@ -2310,19 +2252,20 @@ class Planning3DWidget(QWidget):
 
         tolerance = 1e-12
 
-        if (
-            np.any(
-                candidate_center_norm
-                < minimum_center
-                - tolerance
-            )
-            or np.any(
-                candidate_center_norm
-                > maximum_center
-                + tolerance
-            )
-        ):
-            return
+        if not box.allow_outside_reference:
+            if (
+                np.any(
+                    candidate_center_norm
+                    < minimum_center
+                    - tolerance
+                )
+                or np.any(
+                    candidate_center_norm
+                    > maximum_center
+                    + tolerance
+                )
+            ):
+                return
 
         setattr(
             box,
@@ -2341,6 +2284,8 @@ class Planning3DWidget(QWidget):
         box.center_z = float(
             candidate_center_norm[2]
         )
+
+        box.clamp()
 
         self.refresh_planning_geometry()
 
@@ -2550,6 +2495,123 @@ class Planning3DWidget(QWidget):
             return None
 
         return corner_index
+
+    def _drag_localizer_corner_rotation(
+        self,
+        handle_id,
+        delta_x_pixels,
+        delta_y_pixels,
+    ):
+        """
+        Rotate the selected Localizer slab about the
+        scanner axis selected in the 3D toolbar.
+
+        Preserve center and all three FOV dimensions.
+        """
+        if (
+            not self.planning_editable
+            or self.planning_scene is None
+            or self.planning_state is None
+        ):
+            return
+
+        corner_index = self._corner_handle_index(
+            handle_id
+        )
+        if corner_index is None:
+            return
+
+        axis = self.fov_axis_combo.currentText().upper()
+
+        if axis not in ("X", "Y", "Z"):
+            return
+
+        box = self.planning_state.fov_box
+        geometry = self._geometry_for_box(box)
+
+        corners = scan_geometry_box_corners_scanner_m(
+            geometry
+        )
+
+        center = np.asarray(
+            geometry.center_scanner_m,
+            dtype=float,
+        )
+        corner = np.asarray(
+            corners[corner_index],
+            dtype=float,
+        )
+
+        # Probe the on-screen direction of a small
+        # positive rotation around the selected axis.
+        probe_angle_deg = 2.0
+
+        rotations = {
+            "X": (probe_angle_deg, 0.0, 0.0),
+            "Y": (0.0, probe_angle_deg, 0.0),
+            "Z": (0.0, 0.0, probe_angle_deg),
+        }
+
+        delta_rotation = planning_euler_to_matrix(
+            *rotations[axis]
+        )
+
+        probed_corner = (
+            center
+            + delta_rotation @ (corner - center)
+        )
+
+        screen_corner = (
+            self._project_scanner_point_to_widget(
+                corner
+            )
+        )
+        screen_probe = (
+            self._project_scanner_point_to_widget(
+                probed_corner
+            )
+        )
+
+        if screen_corner is None or screen_probe is None:
+            return
+
+        screen_direction = screen_probe - screen_corner
+        squared_length = float(
+            np.dot(screen_direction, screen_direction)
+        )
+
+        # Degenerate projection: this axis cannot be
+        # manipulated reliably from this camera angle.
+        if squared_length < 1.0:
+            return
+
+        mouse_delta = np.array(
+            [delta_x_pixels, delta_y_pixels],
+            dtype=float,
+        )
+
+        angle_delta = (
+            probe_angle_deg
+            * float(np.dot(mouse_delta, screen_direction))
+            / squared_length
+        )
+
+        # Avoid sudden jumps when the projected handle
+        # is close to the viewing direction.
+        angle_delta = float(
+            np.clip(angle_delta, -5.0, 5.0)
+        )
+
+        if abs(angle_delta) < 1e-6:
+            return
+
+        self._rotate_fov_scanner_axis_delta(
+            axis,
+            angle_delta,
+        )
+
+        self.refresh_planning_geometry()
+        self.planning_changed.emit()
 
     def _drag_fov_corner_handle(
         self,
@@ -3024,6 +3086,7 @@ class Planning3DWidget(QWidget):
             self.fov_axis_combo,
             self.fov_minus_button,
             self.fov_plus_button,
+            self.fov_reset_button,
         ):
             control.setEnabled(
                 self.planning_editable
@@ -3041,6 +3104,7 @@ class Planning3DWidget(QWidget):
             scene.active_region.state,
             scene.reference_fov_m,
             show_fov=True,
+            capture_reset_snapshot=False,
         )
 
         self.planning_scene = scene
@@ -3149,11 +3213,54 @@ class Planning3DWidget(QWidget):
             )
             item.show()
 
+    def reset_selected_fov(self):
+        """
+        Localizer:
+            Reset selected slab to its centered,
+            orthogonal, parameter-defined geometry.
+
+        GRE:
+            Restore the geometry captured when the
+            planning context was opened.
+        """
+        if not self.planning_editable:
+            return
+
+        if self.planning_state is None:
+            return
+
+        if self.planning_scene is not None:
+            scene = self.planning_scene
+
+            reset_values = scene.reset_boxes.get(
+                scene.active_id
+            )
+        else:
+            reset_values = self._fov_reset_snapshot
+
+        if reset_values is None:
+            return
+
+        box = self.planning_state.fov_box
+
+        for name, value in reset_values.items():
+            if hasattr(box, name):
+                setattr(box, name, float(value))
+
+        box.clamp()
+
+        self.refresh_planning_geometry()
+        self.refresh_other_region_wireframes()
+
+        # Update 2D viewers and the examination state.
+        self.planning_changed.emit()
+
     def set_planning_context(
         self,
         planning_state,
         reference_fov_m,
         show_fov=True,
+        capture_reset_snapshot=True,
     ):
         """
         Attach the shared PlanningState and physical
@@ -3172,6 +3279,7 @@ class Planning3DWidget(QWidget):
             self.fov_axis_combo,
             self.fov_minus_button,
             self.fov_plus_button,
+            self.fov_reset_button,
         ):
             control.setEnabled(False)
 
@@ -3193,6 +3301,15 @@ class Planning3DWidget(QWidget):
 
         self.planning_state = (
             planning_state
+        )
+
+        self._fov_reset_snapshot = (
+            dict(planning_state.fov_box.as_dict())
+            if (
+                capture_reset_snapshot
+                and planning_state is not None
+            )
+            else None
         )
 
         self.reference_fov_m = (
@@ -3222,10 +3339,12 @@ class Planning3DWidget(QWidget):
             self.fov_axis_combo,
             self.fov_minus_button,
             self.fov_plus_button,
+            self.fov_reset_button,
         ):
             control.setEnabled(False)
 
         self.planning_state = None
+        self._fov_reset_snapshot = None
         self.reference_fov_m = None
 
         self._clear_localizer_planes()
@@ -3869,9 +3988,6 @@ class Planning3DWidget(QWidget):
         No geometry is inferred from any 2D ROI.
         """
 
-        for item in self.fov_rotate_handle_items.values():
-            item.hide()
-
         if (
             self.planning_state is None
             or not self.show_planning_fov
@@ -4247,53 +4363,9 @@ class Planning3DWidget(QWidget):
                 handle_id
             ].show()
 
-        # -------------------------------------------------
-        # Rotation handles: outside the current box.
-        # -------------------------------------------------
-
-        if self.planning_editable:
-            center = np.asarray(
-                scan_geometry.center_scanner_m,
-                dtype=float,
-            )
-
-            sizes = np.asarray(
-                scan_geometry.fov_local_m,
-                dtype=float,
-            )
-
-            radius = (
-                0.5 * float(np.linalg.norm(sizes))
-                + 0.015
-            )
-
-            for handle_id, item in (
-                self.fov_rotate_handle_items.items()
-            ):
-                direction = (
-                    self.fov_rotate_directions[
-                        handle_id
-                    ]
-                )
-
-                position = (
-                    center + radius * direction
-                )
-
-                item.setData(
-                    pos=position.reshape(1, 3),
-                    color=self.fov_rotate_colors[
-                        handle_id
-                    ],
-                    size=18.0,
-                    pxMode=True,
-                )
-
-                item.show()
-
-        else:
-            # Keep the Box visible, but do not allow
-            # direct manipulation in read-only mode.
+        # Keep the Box visible, but do not allow
+        # direct manipulation in read-only mode.
+        if not self.planning_editable:
             for group in (
                 self.fov_corner_handle_items,
                 self.fov_face_handle_items,

@@ -174,6 +174,12 @@ class PlanningScene:
 
     active_id: str = "Axial"
 
+    reset_boxes: dict[str, dict] = field(
+        default_factory=dict,
+        repr=False,
+        compare=False,
+    )
+
     def select(self, region_id: str):
         if region_id not in self.regions:
             raise KeyError(region_id)
