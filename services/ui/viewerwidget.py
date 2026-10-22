@@ -2186,8 +2186,8 @@ class ViewerWidget(QWidget):
             else:
                 self.fov_roi.setPen(
                     pg.mkPen(
-                        (175, 165, 110, 150),
-                        width=1.5,
+                        (105, 205, 225, 195),
+                        width=2,
                     )
                 )
 
@@ -2212,13 +2212,13 @@ class ViewerWidget(QWidget):
             else:
                 # Low-contrast, always-visible Box.
                 projection_color = (
-                    110, 145, 170, 45
+                    90, 180, 205, 115
                 )
                 intersection_color = (
-                    130, 165, 185, 95
+                    105, 205, 225, 175
                 )
-                projection_width = 1
-                intersection_width = 1.5
+                projection_width = 1.5
+                intersection_width = 2
                 z_value = 15
 
             box = region.state.fov_box

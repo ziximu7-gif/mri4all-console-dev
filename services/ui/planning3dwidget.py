@@ -3190,7 +3190,7 @@ class Planning3DWidget(QWidget):
             if item is None:
                 item = gl.GLLinePlotItem(
                     pos=points,
-                    color=(0.45, 0.65, 0.75, 0.25),
+                    color=(0.35, 0.78, 0.88, 0.60),
                     width=2,
                     antialias=True,
                     mode="lines",
@@ -3206,7 +3206,7 @@ class Planning3DWidget(QWidget):
 
             item.setData(
                 pos=points,
-                color=(0.45, 0.65, 0.75, 0.25),
+                color=(0.35, 0.78, 0.88, 0.60),
                 width=2,
                 antialias=True,
                 mode="lines",
