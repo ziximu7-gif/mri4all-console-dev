@@ -46,8 +46,13 @@ def add_gradients(grads: Union[list, tuple], system=Opts(), max_grad: int = 0, m
         lasts.append(grads[ii].last)
         durs.append(calc_duration(grads[ii]))
 
-    # Convert to numpy.ndarray for fancy-indexing later on
-    firsts, lasts = np.array(firsts), np.array(lasts)
+    # Convert to numpy.ndarray for fancy-indexing later on.
+    # Keep durs as an array too so the scalar/1D case is handled consistently.
+    firsts, lasts, durs = (
+        np.asarray(firsts),
+        np.asarray(lasts),
+        np.asarray(durs),
+    )
 
     common_delay = min(delays)
     total_duration = max(durs)
